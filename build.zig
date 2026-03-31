@@ -4,8 +4,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const pixio_mod = b.addModule("pixio", .{
-        .root_source_file = b.path("src/pixio.zig"),
+    const pixio_mod = b.addModule("Pixio", .{
+        .root_source_file = b.path("src/Pixio.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -17,9 +17,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    unit_tests.root_module.addImport("pixio", pixio_mod);
+    unit_tests.root_module.addImport("Pixio", pixio_mod);
 
     const run_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run pixio unit tests");
+    const test_step = b.step("test", "Run Pixio unit tests");
     test_step.dependOn(&run_tests.step);
 }

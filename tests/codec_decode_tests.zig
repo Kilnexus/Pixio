@@ -1,5 +1,5 @@
 const std = @import("std");
-const imaging = @import("pixio");
+const imaging = @import("Pixio");
 const helpers = @import("helpers.zig");
 
 test "decodeRgb8 decodes repository sample png natively" {

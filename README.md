@@ -20,15 +20,15 @@ zig build test
 ## Package Import (build.zig)
 
 ```zig
-const pixio_dep = b.dependency("pixio", .{
+const pixio_dep = b.dependency("Pixio", .{
     .target = target,
     .optimize = optimize,
 });
-exe.root_module.addImport("pixio", pixio_dep.module("pixio"));
+exe.root_module.addImport("Pixio", pixio_dep.module("Pixio"));
 ```
 
 ## Basic Usage
 
 ```zig
-const pixio = @import("pixio");
+const pixio = @import("Pixio");
 ```
