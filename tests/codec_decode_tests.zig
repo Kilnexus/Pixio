@@ -92,20 +92,24 @@ test "decodeRgb8 decodes palette gif" {
     try testing.expect(image.data[4] > image.data[5]);
 }
 
-test "decodeRgb8 rejects interlaced png" {
+test "decodeRgb8 decodes interlaced png" {
     const testing = std.testing;
 
-    const base_png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/jPwPAfAAUAAf+mXJtdAAAAAElFTkSuQmCC");
-    defer testing.allocator.free(base_png);
-
-    const png = try testing.allocator.dupe(u8, base_png);
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAGK06rlAAAAD0lEQVR4nGP4zwAEEAIIACDuBfv1K+nKAAAAAElFTkSuQmCC");
     defer testing.allocator.free(png);
-    png[28] = 1;
-    var ihdr_crc = std.hash.Crc32.init();
-    ihdr_crc.update(png[12..29]);
-    helpers.writeU32le(png[29..33], @byteSwap(ihdr_crc.final()));
 
-    try testing.expectError(error.UnsupportedPngInterlace, imaging.decodeRgb8(testing.allocator, png));
+    var image = try imaging.decodeRgb8(testing.allocator, png);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 2), image.height);
+    try testing.expectEqual(@as(usize, 3), image.channels);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        255, 0, 0,
+        0, 255, 0,
+        0, 0, 255,
+        255, 255, 255,
+    }, image.data);
 }
 
 test "decodeRgb8 decodes png-backed ico" {
