@@ -52,6 +52,15 @@ test "decodeRgb8 decodes baseline jpeg" {
     try testing.expect(!std.mem.eql(u8, image.data[0..3], image.data[3..6]));
 }
 
+test "decodeRgb8 rejects progressive jpeg" {
+    const testing = std.testing;
+
+    const jpeg = try helpers.decodeBase64Alloc(testing.allocator, "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wgARCAABAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAVAQEBAAAAAAAAAAAAAAAAAAAFBv/aAAwDAQACEAMQAAABigy4/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABAH/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPxB//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPxB//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxB//9k=");
+    defer testing.allocator.free(jpeg);
+
+    try testing.expectError(error.UnsupportedJpegFrame, imaging.decodeRgb8(testing.allocator, jpeg));
+}
+
 test "decodeRgb8 decodes palette gif" {
     const testing = std.testing;
 
@@ -81,6 +90,22 @@ test "decodeRgb8 decodes palette gif" {
     try testing.expect(image.data[0] > image.data[2]);
     try testing.expect(image.data[4] > image.data[3]);
     try testing.expect(image.data[4] > image.data[5]);
+}
+
+test "decodeRgb8 rejects interlaced png" {
+    const testing = std.testing;
+
+    const base_png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/jPwPAfAAUAAf+mXJtdAAAAAElFTkSuQmCC");
+    defer testing.allocator.free(base_png);
+
+    const png = try testing.allocator.dupe(u8, base_png);
+    defer testing.allocator.free(png);
+    png[28] = 1;
+    var ihdr_crc = std.hash.Crc32.init();
+    ihdr_crc.update(png[12..29]);
+    helpers.writeU32le(png[29..33], @byteSwap(ihdr_crc.final()));
+
+    try testing.expectError(error.UnsupportedPngInterlace, imaging.decodeRgb8(testing.allocator, png));
 }
 
 test "decodeRgb8 decodes png-backed ico" {
@@ -180,4 +205,16 @@ test "decodeRgb8 decodes bmp-backed ico" {
     try testing.expectEqual(@as(usize, 3), image.channels);
     try testing.expect(image.data[0] > image.data[1]);
     try testing.expect(image.data[0] > image.data[2]);
+}
+
+test "decodeRgb8 rejects lossy and animated webp" {
+    const testing = std.testing;
+
+    const lossy = try helpers.decodeBase64Alloc(testing.allocator, "UklGRkgAAABXRUJQVlA4IDwAAAAwAgCdASoCAAEAAAAAJaACdLoB+AADIQb7gAD5f/8uv//vTP/5zIj//2Z7/Znv9me/+zPf/maJjmP16AA=");
+    defer testing.allocator.free(lossy);
+    try testing.expectError(error.UnsupportedWebpBitstream, imaging.decodeRgb8(testing.allocator, lossy));
+
+    const animated = try helpers.decodeBase64Alloc(testing.allocator, "UklGRsoAAABXRUJQVlA4WAoAAAACAAAAAAAAAAAAQU5JTQYAAAAAAAAAAABBTk1GSgAAAAAAAAAAAAAAAAAAAGQAAAJWUDggMgAAADABAJ0BKgEAAQABQCYloAADcAD+8ut///mwP/bz/wR6Af//0uD//pcH//S4P/SkAAAAQU5NRkwAAAAAAAAAAAAAAAAAAABkAAAAVlA4IDQAAAA0AQCdASoBAAEAAAAmJaAAA3AA/ukiH//3nz//ufP/+58/6M///yn7//I4//8jj/5QIAAA");
+    defer testing.allocator.free(animated);
+    try testing.expectError(error.UnsupportedWebpAnimation, imaging.decodeRgb8(testing.allocator, animated));
 }

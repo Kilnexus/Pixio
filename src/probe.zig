@@ -6,6 +6,8 @@ const jpeg = @import("codecs/jpeg.zig");
 const gif = @import("codecs/gif.zig");
 const ico = @import("codecs/ico.zig");
 const webp = @import("codecs/webp.zig");
+const webp_probe = @import("codecs/webp/probe.zig");
+const webp_container = @import("codecs/webp/container.zig");
 
 pub const ImageFormat = format.ImageFormat;
 
@@ -47,6 +49,7 @@ pub const ProbeError =
     webp.WebpError ||
     error{
         UnsupportedImageFormat,
+        FileTooBig,
     };
 
 pub fn probeInfo(bytes: []const u8) !ImageInfo {
@@ -62,9 +65,22 @@ pub fn probeInfo(bytes: []const u8) !ImageInfo {
 }
 
 pub fn probeFileInfo(allocator: std.mem.Allocator, path: []const u8) !ImageInfo {
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 256 * 1024 * 1024);
-    defer allocator.free(bytes);
-    return probeInfo(bytes);
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    var header: [64]u8 = undefined;
+    const header_len = try file.preadAll(&header, 0);
+    const bytes = header[0..header_len];
+
+    return switch (format.detectFormat(bytes)) {
+        .png => try probePng(bytes),
+        .bmp => try probeBmp(bytes),
+        .jpeg => try probeJpegFile(file),
+        .gif => try probeGif(bytes),
+        .ico => try probeIcoFile(allocator, file),
+        .webp => try probeWebpImageFile(file),
+        else => error.UnsupportedImageFormat,
+    };
 }
 
 pub fn probeWebpInfo(bytes: []const u8) !WebpInfo {
@@ -73,9 +89,11 @@ pub fn probeWebpInfo(bytes: []const u8) !WebpInfo {
 }
 
 pub fn probeWebpFileInfo(allocator: std.mem.Allocator, path: []const u8) !WebpInfo {
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 256 * 1024 * 1024);
-    defer allocator.free(bytes);
-    return probeWebpInfo(bytes);
+    _ = allocator;
+
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    return probeWebpFile(file);
 }
 
 pub fn probeWebpPrimaryChunkTag(bytes: []const u8) !WebpChunkTag {
@@ -312,6 +330,181 @@ fn probeWebp(bytes: []const u8) !ImageInfo {
         .channels = 3,
         .has_alpha = info.has_alpha,
     };
+}
+
+fn probeIcoFile(allocator: std.mem.Allocator, file: std.fs.File) !ImageInfo {
+    const stat = try file.stat();
+    if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
+    const file_size: usize = @intCast(stat.size);
+
+    var header: [6]u8 = undefined;
+    const header_len = try file.preadAll(&header, 0);
+    if (header_len < header.len) return error.InvalidIcoHeader;
+
+    const count = readU16le(header[4..6]);
+    if (count == 0) return error.InvalidIcoDirectory;
+
+    const directory_len = 6 + count * 16;
+    if (directory_len > file_size) return error.InvalidIcoDirectory;
+
+    const directory = try allocator.alloc(u8, directory_len);
+    defer allocator.free(directory);
+
+    const directory_read = try file.preadAll(directory, 0);
+    if (directory_read < directory_len) return error.InvalidIcoDirectory;
+
+    return probeIco(directory);
+}
+
+fn probeJpegFile(file: std.fs.File) !ImageInfo {
+    var soi: [2]u8 = undefined;
+    const soi_len = try file.preadAll(&soi, 0);
+    if (soi_len < soi.len or soi[0] != 0xff or soi[1] != 0xd8) return error.InvalidJpegHeader;
+
+    var pos: u64 = 2;
+    while (true) {
+        while (true) {
+            const byte = try readByteAt(file, pos) orelse return error.MissingJpegFrame;
+            if (byte == 0xff) break;
+            pos += 1;
+        }
+
+        var marker: u8 = 0;
+        while (true) {
+            pos += 1;
+            marker = try readByteAt(file, pos) orelse return error.InvalidJpegMarker;
+            if (marker != 0xff) {
+                pos += 1;
+                break;
+            }
+        }
+
+        if (marker == 0xd9 or marker == 0xda) break;
+        if (marker >= 0xd0 and marker <= 0xd7) continue;
+
+        var segment_len_bytes: [2]u8 = undefined;
+        if (try file.preadAll(&segment_len_bytes, pos) < segment_len_bytes.len) return error.InvalidJpegData;
+        const segment_len = readU16be(segment_len_bytes[0..2]);
+        if (segment_len < 2) return error.InvalidJpegSegment;
+
+        if (isJpegFrameMarker(marker)) {
+            if (segment_len < 8) return error.InvalidJpegSegment;
+
+            var frame_header: [6]u8 = undefined;
+            if (try file.preadAll(&frame_header, pos + 2) < frame_header.len) return error.InvalidJpegSegment;
+
+            const height = readU16be(frame_header[1..3]);
+            const width = readU16be(frame_header[3..5]);
+            const components = frame_header[5];
+            return .{
+                .format = .jpeg,
+                .width = width,
+                .height = height,
+                .channels = if (components == 1) 1 else 3,
+                .has_alpha = false,
+            };
+        }
+
+        pos += segment_len;
+    }
+
+    return error.MissingJpegFrame;
+}
+
+fn probeWebpFile(file: std.fs.File) !WebpInfo {
+    const stat = try file.stat();
+    if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
+    const file_size: usize = @intCast(stat.size);
+
+    var header: [12]u8 = undefined;
+    const header_len = try file.preadAll(&header, 0);
+    if (header_len < header.len) return error.InvalidWebpHeader;
+    try webp_container.validateHeader(&header);
+
+    var vp8x_info: ?WebpInfo = null;
+    var primary_info: ?WebpInfo = null;
+    var saw_animation_chunk = false;
+    var offset: usize = 12;
+
+    while (offset + 8 <= file_size) {
+        var chunk_header: [8]u8 = undefined;
+        if (try file.preadAll(&chunk_header, offset) < chunk_header.len) return error.InvalidWebpChunk;
+
+        const chunk_size = webp_container.readU32le(chunk_header[4..8]);
+        const payload_offset = offset + 8;
+        if (payload_offset > file_size or chunk_size > file_size - payload_offset) return error.InvalidWebpChunk;
+
+        switch (webp_container.mapChunkTag(chunk_header[0..4])) {
+            .vp8x => {
+                var payload: [10]u8 = undefined;
+                const payload_len = @min(payload.len, chunk_size);
+                if (try file.preadAll(payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
+                vp8x_info = try webp_probe.parseVp8x(payload[0..payload_len]);
+            },
+            .vp8 => {
+                var payload: [10]u8 = undefined;
+                const payload_len = @min(payload.len, chunk_size);
+                if (try file.preadAll(payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
+                primary_info = try webp_probe.parseVp8(payload[0..payload_len]);
+            },
+            .vp8l => {
+                var payload: [5]u8 = undefined;
+                const payload_len = @min(payload.len, chunk_size);
+                if (try file.preadAll(payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
+                primary_info = try webp_probe.parseVp8l(payload[0..payload_len]);
+            },
+            .anmf => saw_animation_chunk = true,
+            else => {},
+        }
+
+        const payload_end = payload_offset + chunk_size;
+        offset = payload_end + (chunk_size & 1);
+    }
+
+    if (primary_info) |info| {
+        var resolved = info;
+        if (vp8x_info) |extended| {
+            resolved.has_alpha = extended.has_alpha;
+            resolved.is_animated = extended.is_animated;
+            resolved.has_icc = extended.has_icc;
+            resolved.has_exif = extended.has_exif;
+            resolved.has_xmp = extended.has_xmp;
+            resolved.width = extended.width;
+            resolved.height = extended.height;
+        }
+        return resolved;
+    }
+
+    if (vp8x_info) |extended| {
+        if (extended.is_animated and saw_animation_chunk) return extended;
+    }
+
+    return error.MissingWebpChunk;
+}
+
+fn probeWebpImageFile(file: std.fs.File) !ImageInfo {
+    const info = try probeWebpFile(file);
+    return .{
+        .format = .webp,
+        .width = info.width,
+        .height = info.height,
+        .channels = 3,
+        .has_alpha = info.has_alpha,
+    };
+}
+
+fn readByteAt(file: std.fs.File, offset: u64) !?u8 {
+    var byte: [1]u8 = undefined;
+    const read = try file.preadAll(&byte, offset);
+    if (read == 0) return null;
+    return byte[0];
+}
+
+fn isJpegFrameMarker(marker: u8) bool {
+    return (marker >= 0xc0 and marker <= 0xc3) or
+        (marker >= 0xc5 and marker <= 0xc7) or
+        (marker >= 0xc9 and marker <= 0xcb) or
+        (marker >= 0xcd and marker <= 0xcf);
 }
 
 fn readU16le(bytes: []const u8) usize {

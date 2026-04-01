@@ -13,6 +13,7 @@ pub const ImageFormat = format.ImageFormat;
 
 pub const DecodeError = types.ImageError || png.PngError || bmp.BmpError || jpeg.JpegError || gif.GifError || ico.IcoError || webp.WebpError || error{
     UnsupportedImageFormat,
+    FileTooBig,
 };
 
 pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
@@ -28,7 +29,15 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
 }
 
 pub fn decodeFileRgb8(allocator: std.mem.Allocator, path: []const u8) !ImageU8 {
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 256 * 1024 * 1024);
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const stat = try file.stat();
+    if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
+
+    const byte_len: usize = @intCast(stat.size);
+    const bytes = try allocator.alloc(u8, byte_len);
     defer allocator.free(bytes);
-    return decodeRgb8(allocator, bytes);
+    const bytes_read = try file.readAll(bytes);
+    return decodeRgb8(allocator, bytes[0..bytes_read]);
 }

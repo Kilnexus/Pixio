@@ -23,6 +23,7 @@ pub fn scanChunks(bytes: []const u8) !WebpScan {
     var vp8x_info: ?WebpInfo = null;
     var primary_info: ?WebpInfo = null;
     var primary_chunk: ?WebpChunk = null;
+    var animation_chunk: ?WebpChunk = null;
 
     while (try it.next()) |chunk| {
         switch (chunk.tag) {
@@ -35,6 +36,7 @@ pub fn scanChunks(bytes: []const u8) !WebpScan {
                 primary_info = try parseVp8l(chunk.payload);
                 primary_chunk = chunk;
             },
+            .anmf => animation_chunk = chunk,
             else => {},
         }
     }
@@ -54,6 +56,15 @@ pub fn scanChunks(bytes: []const u8) !WebpScan {
             .info = resolved,
             .primary = primary_chunk.?,
         };
+    }
+
+    if (vp8x_info) |extended| {
+        if (extended.is_animated and animation_chunk != null) {
+            return .{
+                .info = extended,
+                .primary = animation_chunk.?,
+            };
+        }
     }
 
     return error.MissingWebpChunk;

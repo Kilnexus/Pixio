@@ -26,7 +26,9 @@ All decoders return RGB8 output. Alpha is reported by probe APIs where available
 
 ## Probe Support
 
-`probeInfo` returns width, height, RGB channel count, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP. Truncated fixed-layout headers now return typed errors instead of relying on slice bounds panics.
+`probeInfo` is a metadata-oriented shallow probe. It returns width, height, RGB channel count, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP, and it may succeed for files that the current decoders still reject, such as progressive JPEG or lossy WebP.
+
+`probeFileInfo` and `probeWebpFileInfo` avoid reading entire files into memory. They read fixed-layout headers directly and scan JPEG/WebP containers incrementally.
 
 ## Build
 

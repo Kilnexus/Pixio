@@ -51,6 +51,49 @@ test "probeWebpInfo distinguishes lossless and lossy bitstreams" {
     try testing.expect(!lossy_info.is_animated);
 }
 
+test "probeInfo reports metadata for decode-unsupported variants" {
+    const testing = std.testing;
+
+    const progressive_jpeg = try helpers.decodeBase64Alloc(testing.allocator, "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wgARCAABAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAVAQEBAAAAAAAAAAAAAAAAAAAFBv/aAAwDAQACEAMQAAABigy4/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABAH/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPxB//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPxB//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxB//9k=");
+    defer testing.allocator.free(progressive_jpeg);
+
+    const base_png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/jPwPAfAAUAAf+mXJtdAAAAAElFTkSuQmCC");
+    defer testing.allocator.free(base_png);
+
+    const interlaced_png = try testing.allocator.dupe(u8, base_png);
+    defer testing.allocator.free(interlaced_png);
+    interlaced_png[28] = 1;
+    var ihdr_crc = std.hash.Crc32.init();
+    ihdr_crc.update(interlaced_png[12..29]);
+    helpers.writeU32le(interlaced_png[29..33], @byteSwap(ihdr_crc.final()));
+
+    const lossy_webp = try helpers.decodeBase64Alloc(testing.allocator, "UklGRkgAAABXRUJQVlA4IDwAAAAwAgCdASoCAAEAAAAAJaACdLoB+AADIQb7gAD5f/8uv//vTP/5zIj//2Z7/Znv9me/+zPf/maJjmP16AA=");
+    defer testing.allocator.free(lossy_webp);
+
+    const animated_webp = try helpers.decodeBase64Alloc(testing.allocator, "UklGRsoAAABXRUJQVlA4WAoAAAACAAAAAAAAAAAAQU5JTQYAAAAAAAAAAABBTk1GSgAAAAAAAAAAAAAAAAAAAGQAAAJWUDggMgAAADABAJ0BKgEAAQABQCYloAADcAD+8ut///mwP/bz/wR6Af//0uD//pcH//S4P/SkAAAAQU5NRkwAAAAAAAAAAAAAAAAAAABkAAAAVlA4IDQAAAA0AQCdASoBAAEAAAAmJaAAA3AA/ukiH//3nz//ufP/+58/6M///yn7//I4//8jj/5QIAAA");
+    defer testing.allocator.free(animated_webp);
+
+    const jpeg_info = try imaging.probeInfo(progressive_jpeg);
+    try testing.expectEqual(imaging.ImageFormat.jpeg, jpeg_info.format);
+    try testing.expectEqual(@as(usize, 2), jpeg_info.width);
+    try testing.expectEqual(@as(usize, 1), jpeg_info.height);
+
+    const png_info = try imaging.probeInfo(interlaced_png);
+    try testing.expectEqual(imaging.ImageFormat.png, png_info.format);
+    try testing.expectEqual(@as(usize, 1), png_info.width);
+    try testing.expectEqual(@as(usize, 1), png_info.height);
+
+    const lossy_info = try imaging.probeInfo(lossy_webp);
+    try testing.expectEqual(imaging.ImageFormat.webp, lossy_info.format);
+    try testing.expectEqual(@as(usize, 2), lossy_info.width);
+    try testing.expectEqual(@as(usize, 1), lossy_info.height);
+
+    const animated_info = try imaging.probeWebpInfo(animated_webp);
+    try testing.expectEqual(@as(usize, 1), animated_info.width);
+    try testing.expectEqual(@as(usize, 1), animated_info.height);
+    try testing.expect(animated_info.is_animated);
+}
+
 test "probeWebpInfo reports alpha for lossless rgba sample" {
     const testing = std.testing;
 
