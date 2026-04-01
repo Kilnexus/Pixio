@@ -51,11 +51,11 @@ pub const ProbeError =
 
 pub fn probeInfo(bytes: []const u8) !ImageInfo {
     return switch (format.detectFormat(bytes)) {
-        .png => probePng(bytes),
-        .bmp => probeBmp(bytes),
+        .png => try probePng(bytes),
+        .bmp => try probeBmp(bytes),
         .jpeg => try probeJpeg(bytes),
-        .gif => probeGif(bytes),
-        .ico => probeIco(bytes),
+        .gif => try probeGif(bytes),
+        .ico => try probeIco(bytes),
         .webp => try probeWebp(bytes),
         else => error.UnsupportedImageFormat,
     };
@@ -177,9 +177,14 @@ pub fn decodeVp8lPayloadArgb(allocator: std.mem.Allocator, payload: []const u8) 
     return webp.decodeVp8lPayloadArgb(allocator, payload);
 }
 
-fn probePng(bytes: []const u8) ImageInfo {
+fn probePng(bytes: []const u8) !ImageInfo {
+    if (bytes.len < 33) return error.InvalidPngChunk;
+    if (readU32be(bytes[8..12]) != 13) return error.InvalidPngChunk;
+    if (!std.mem.eql(u8, bytes[12..16], "IHDR")) return error.MissingPngIhdr;
+
     const width = readU32be(bytes[16..20]);
     const height = readU32be(bytes[20..24]);
+    if (width == 0 or height == 0) return error.InvalidPngDimensions;
     const color_type = bytes[25];
     return .{
         .format = .png,
@@ -190,9 +195,12 @@ fn probePng(bytes: []const u8) ImageInfo {
     };
 }
 
-fn probeBmp(bytes: []const u8) ImageInfo {
+fn probeBmp(bytes: []const u8) !ImageInfo {
+    if (bytes.len < 30) return error.InvalidBmpHeader;
+
     const width_i = readI32le(bytes[18..22]);
     const height_i = readI32le(bytes[22..26]);
+    if (width_i == 0 or height_i == 0) return error.InvalidBmpDimensions;
     const bit_count = readU16le(bytes[28..30]);
     return .{
         .format = .bmp,
@@ -203,18 +211,29 @@ fn probeBmp(bytes: []const u8) ImageInfo {
     };
 }
 
-fn probeGif(bytes: []const u8) ImageInfo {
+fn probeGif(bytes: []const u8) !ImageInfo {
+    if (bytes.len < 10) return error.InvalidGifHeader;
+
+    const width = readU16le(bytes[6..8]);
+    const height = readU16le(bytes[8..10]);
+    if (width == 0 or height == 0) return error.InvalidGifDimensions;
+
     return .{
         .format = .gif,
-        .width = readU16le(bytes[6..8]),
-        .height = readU16le(bytes[8..10]),
+        .width = width,
+        .height = height,
         .channels = 3,
         .has_alpha = false,
     };
 }
 
-fn probeIco(bytes: []const u8) ImageInfo {
+fn probeIco(bytes: []const u8) !ImageInfo {
+    if (bytes.len < 6) return error.InvalidIcoHeader;
+
     const count = readU16le(bytes[4..6]);
+    if (count == 0) return error.InvalidIcoDirectory;
+    if (bytes.len < 6 + count * 16) return error.InvalidIcoDirectory;
+
     var best_width: usize = 0;
     var best_height: usize = 0;
     var best_score: usize = 0;
@@ -233,6 +252,8 @@ fn probeIco(bytes: []const u8) ImageInfo {
             best_alpha = bit_count == 32;
         }
     }
+
+    if (best_score == 0) return error.MissingIcoImage;
 
     return .{
         .format = .ico,

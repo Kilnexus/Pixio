@@ -73,3 +73,12 @@ test "findPrimaryChunk identifies webp payload kind" {
     const tag = try imaging.probeWebpPrimaryChunkTag(bytes);
     try testing.expectEqual(imaging.WebpChunkTag.vp8l, tag);
 }
+
+test "probeInfo rejects truncated fixed-layout headers" {
+    const testing = std.testing;
+
+    try testing.expectError(error.InvalidPngChunk, imaging.probeInfo("\x89PNG\r\n\x1a\n"));
+    try testing.expectError(error.InvalidBmpHeader, imaging.probeInfo("BM"));
+    try testing.expectError(error.InvalidGifHeader, imaging.probeInfo("GIF89a"));
+    try testing.expectError(error.InvalidIcoHeader, imaging.probeInfo("\x00\x00\x01\x00"));
+}

@@ -4,12 +4,29 @@
 
 ## Features
 
-- Image decode to RGB8: PNG, BMP, JPEG, GIF, ICO, WebP
+- Image decode to RGB8 with explicit format constraints
 - Format probe and metadata inspection
 - WebP lossless inspection helpers
 - Bilinear resize
 - Letterbox utilities
 - Box remap helpers (letterboxed image -> source coordinates)
+
+## Decode Support Matrix
+
+All decoders return RGB8 output. Alpha is reported by probe APIs where available but is not preserved in decode output.
+
+| Format | Decode support | Notes |
+| --- | --- | --- |
+| PNG | Partial | 8-bit grayscale, RGB, RGBA; non-interlaced only |
+| BMP | Partial | Uncompressed 24-bit and 32-bit BMP |
+| JPEG | Partial | Baseline SOF0 JPEG; grayscale or 3-component scans |
+| GIF | Partial | Palette GIF decode of the first image frame |
+| ICO | Partial | PNG-backed icons and BMP-backed 24-bit/32-bit icons |
+| WebP | Partial | Lossless VP8L decode only; lossy VP8/VP8X animation decode is not implemented |
+
+## Probe Support
+
+`probeInfo` returns width, height, RGB channel count, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP. Truncated fixed-layout headers now return typed errors instead of relying on slice bounds panics.
 
 ## Build
 
