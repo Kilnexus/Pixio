@@ -13,6 +13,34 @@ test "probeInfo reads repository sample png metadata" {
     try testing.expect(!info.has_alpha);
 }
 
+test "probeInfo reports alpha for png tRNS" {
+    const testing = std.testing;
+
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAAAnRSTlMAAQGU/a4AAAAKSURBVHicY2gAAACCAIF3zXK2AAAAAElFTkSuQmCC");
+    defer testing.allocator.free(png);
+
+    const info = try imaging.probeInfo(png);
+    try testing.expectEqual(imaging.ImageFormat.png, info.format);
+    try testing.expectEqual(@as(usize, 1), info.width);
+    try testing.expectEqual(@as(usize, 1), info.height);
+    try testing.expect(info.has_alpha);
+}
+
+test "probeFileInfo reports alpha for png tRNS" {
+    const testing = std.testing;
+
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAAAnRSTlMAAQGU/a4AAAAKSURBVHicY2gAAACCAIF3zXK2AAAAAElFTkSuQmCC");
+    defer testing.allocator.free(png);
+
+    const path = "._pixio_probe_trns.png";
+    defer std.fs.cwd().deleteFile(path) catch {};
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = png });
+
+    const info = try imaging.probeFileInfo(testing.allocator, path);
+    try testing.expectEqual(imaging.ImageFormat.png, info.format);
+    try testing.expect(info.has_alpha);
+}
+
 test "probeInfo reads lossless webp metadata" {
     const testing = std.testing;
 
@@ -51,19 +79,11 @@ test "probeWebpInfo distinguishes lossless and lossy bitstreams" {
     try testing.expect(!lossy_info.is_animated);
 }
 
-test "probeInfo reports metadata for webp decode-unsupported variants" {
+test "probeInfo reports metadata for animated webp variant" {
     const testing = std.testing;
-
-    const lossy_webp = try helpers.decodeBase64Alloc(testing.allocator, "UklGRkgAAABXRUJQVlA4IDwAAAAwAgCdASoCAAEAAAAAJaACdLoB+AADIQb7gAD5f/8uv//vTP/5zIj//2Z7/Znv9me/+zPf/maJjmP16AA=");
-    defer testing.allocator.free(lossy_webp);
 
     const animated_webp = try helpers.decodeBase64Alloc(testing.allocator, "UklGRsoAAABXRUJQVlA4WAoAAAACAAAAAAAAAAAAQU5JTQYAAAAAAAAAAABBTk1GSgAAAAAAAAAAAAAAAAAAAGQAAAJWUDggMgAAADABAJ0BKgEAAQABQCYloAADcAD+8ut///mwP/bz/wR6Af//0uD//pcH//S4P/SkAAAAQU5NRkwAAAAAAAAAAAAAAAAAAABkAAAAVlA4IDQAAAA0AQCdASoBAAEAAAAmJaAAA3AA/ukiH//3nz//ufP/+58/6M///yn7//I4//8jj/5QIAAA");
     defer testing.allocator.free(animated_webp);
-
-    const lossy_info = try imaging.probeInfo(lossy_webp);
-    try testing.expectEqual(imaging.ImageFormat.webp, lossy_info.format);
-    try testing.expectEqual(@as(usize, 2), lossy_info.width);
-    try testing.expectEqual(@as(usize, 1), lossy_info.height);
 
     const animated_info = try imaging.probeWebpInfo(animated_webp);
     try testing.expectEqual(@as(usize, 1), animated_info.width);

@@ -73,7 +73,7 @@ pub fn probeFileInfo(allocator: std.mem.Allocator, path: []const u8) !ImageInfo 
     const bytes = header[0..header_len];
 
     return switch (format.detectFormat(bytes)) {
-        .png => try probePng(bytes),
+        .png => try probePngFile(file),
         .bmp => try probeBmp(bytes),
         .jpeg => try probeJpegFile(file),
         .gif => try probeGif(bytes),
@@ -204,12 +204,30 @@ fn probePng(bytes: []const u8) !ImageInfo {
     const height = readU32be(bytes[20..24]);
     if (width == 0 or height == 0) return error.InvalidPngDimensions;
     const color_type = bytes[25];
+    var has_alpha = color_type == 4 or color_type == 6;
+
+    var offset: usize = 33;
+    while (offset + 12 <= bytes.len) {
+        const chunk_len = readU32be(bytes[offset .. offset + 4]);
+        const chunk_type = bytes[offset + 4 .. offset + 8];
+        offset += 8;
+        if (offset + chunk_len + 4 > bytes.len) return error.InvalidPngChunk;
+
+        if (std.mem.eql(u8, chunk_type, "tRNS")) {
+            if (pngChunkHasTransparency(color_type, bytes[offset .. offset + chunk_len])) has_alpha = true;
+        } else if (std.mem.eql(u8, chunk_type, "IDAT") or std.mem.eql(u8, chunk_type, "IEND")) {
+            break;
+        }
+
+        offset += chunk_len + 4;
+    }
+
     return .{
         .format = .png,
         .width = width,
         .height = height,
         .channels = 3,
-        .has_alpha = color_type == 4 or color_type == 6,
+        .has_alpha = has_alpha,
     };
 }
 
@@ -329,6 +347,52 @@ fn probeWebp(bytes: []const u8) !ImageInfo {
         .height = info.height,
         .channels = 3,
         .has_alpha = info.has_alpha,
+    };
+}
+
+fn probePngFile(file: std.fs.File) !ImageInfo {
+    var header: [33]u8 = undefined;
+    if (try file.preadAll(&header, 0) < header.len) return error.InvalidPngChunk;
+    if (readU32be(header[8..12]) != 13) return error.InvalidPngChunk;
+    if (!std.mem.eql(u8, header[12..16], "IHDR")) return error.MissingPngIhdr;
+
+    const width = readU32be(header[16..20]);
+    const height = readU32be(header[20..24]);
+    if (width == 0 or height == 0) return error.InvalidPngDimensions;
+    const color_type = header[25];
+    var has_alpha = color_type == 4 or color_type == 6;
+
+    const stat = try file.stat();
+    if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
+    const file_size: usize = @intCast(stat.size);
+
+    var offset: usize = 33;
+    var chunk_header: [8]u8 = undefined;
+    var trns_buf: [256]u8 = undefined;
+    while (offset + 12 <= file_size) {
+        if (try file.preadAll(&chunk_header, offset) < chunk_header.len) return error.InvalidPngChunk;
+        const chunk_len = readU32be(chunk_header[0..4]);
+        const chunk_type = chunk_header[4..8];
+        offset += 8;
+        if (offset + chunk_len + 4 > file_size) return error.InvalidPngChunk;
+
+        if (std.mem.eql(u8, chunk_type, "tRNS")) {
+            if (chunk_len > trns_buf.len) return error.InvalidPngChunk;
+            if (try file.preadAll(trns_buf[0..chunk_len], offset) < chunk_len) return error.InvalidPngChunk;
+            if (pngChunkHasTransparency(color_type, trns_buf[0..chunk_len])) has_alpha = true;
+        } else if (std.mem.eql(u8, chunk_type, "IDAT") or std.mem.eql(u8, chunk_type, "IEND")) {
+            break;
+        }
+
+        offset += chunk_len + 4;
+    }
+
+    return .{
+        .format = .png,
+        .width = width,
+        .height = height,
+        .channels = 3,
+        .has_alpha = has_alpha,
     };
 }
 
@@ -505,6 +569,20 @@ fn isJpegFrameMarker(marker: u8) bool {
         (marker >= 0xc5 and marker <= 0xc7) or
         (marker >= 0xc9 and marker <= 0xcb) or
         (marker >= 0xcd and marker <= 0xcf);
+}
+
+fn pngChunkHasTransparency(color_type: u8, chunk_data: []const u8) bool {
+    return switch (color_type) {
+        0 => chunk_data.len == 2,
+        2 => chunk_data.len == 6,
+        3 => blk: {
+            for (chunk_data) |alpha| {
+                if (alpha != 0xff) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
 }
 
 fn readU16le(bytes: []const u8) usize {

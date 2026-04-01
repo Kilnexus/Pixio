@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const imaging = @import("Pixio");
 const helpers = @import("helpers.zig");
 
@@ -25,6 +26,21 @@ test "decodeRgb8 decodes 24-bit bmp" {
     };
 
     var image = try imaging.decodeRgb8(testing.allocator, &bmp);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0xff, 0x00, 0x00 }, image.data[0..3]);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x00, 0xff, 0x00 }, image.data[3..6]);
+}
+
+test "decodeRgb8 decodes 8-bit palette bmp" {
+    const testing = std.testing;
+
+    const bmp = try helpers.decodeBase64Alloc(testing.allocator, "Qk1CAAAAAAAAAD4AAAAoAAAAAgAAAAEAAAABAAgAAAAAAAQAAAATCwAAEwsAAAIAAAAAAAAAAAD/AAD/AAAAAQAA");
+    defer testing.allocator.free(bmp);
+
+    var image = try imaging.decodeRgb8(testing.allocator, bmp);
     defer image.deinit();
 
     try testing.expectEqual(@as(usize, 2), image.width);
@@ -286,12 +302,27 @@ test "decodeRgb8 decodes bmp-backed ico" {
     try testing.expect(image.data[0] > image.data[2]);
 }
 
-test "decodeRgb8 rejects lossy and animated webp" {
+test "decodeRgb8 handles lossy and animated webp" {
     const testing = std.testing;
 
     const lossy = try helpers.decodeBase64Alloc(testing.allocator, "UklGRkgAAABXRUJQVlA4IDwAAAAwAgCdASoCAAEAAAAAJaACdLoB+AADIQb7gAD5f/8uv//vTP/5zIj//2Z7/Znv9me/+zPf/maJjmP16AA=");
     defer testing.allocator.free(lossy);
-    try testing.expectError(error.UnsupportedWebpBitstream, imaging.decodeRgb8(testing.allocator, lossy));
+    if (builtin.os.tag == .windows) {
+        var image = try imaging.decodeRgb8(testing.allocator, lossy);
+        defer image.deinit();
+
+        try testing.expectEqual(@as(usize, 2), image.width);
+        try testing.expectEqual(@as(usize, 1), image.height);
+        try testing.expectEqual(@as(usize, 3), image.channels);
+        try testing.expect(image.data[0] >= 80 and image.data[0] <= 100);
+        try testing.expect(@abs(@as(i16, image.data[0]) - @as(i16, image.data[1])) <= 2);
+        try testing.expect(image.data[2] <= 5);
+        try testing.expect(image.data[3] > image.data[0]);
+        try testing.expect(@abs(@as(i16, image.data[3]) - @as(i16, image.data[4])) <= 2);
+        try testing.expect(image.data[5] >= 40 and image.data[5] <= 70);
+    } else {
+        try testing.expectError(error.UnsupportedWebpBitstream, imaging.decodeRgb8(testing.allocator, lossy));
+    }
 
     const animated = try helpers.decodeBase64Alloc(testing.allocator, "UklGRsoAAABXRUJQVlA4WAoAAAACAAAAAAAAAAAAQU5JTQYAAAAAAAAAAABBTk1GSgAAAAAAAAAAAAAAAAAAAGQAAAJWUDggMgAAADABAJ0BKgEAAQABQCYloAADcAD+8ut///mwP/bz/wR6Af//0uD//pcH//S4P/SkAAAAQU5NRkwAAAAAAAAAAAAAAAAAAABkAAAAVlA4IDQAAAA0AQCdASoBAAEAAAAmJaAAA3AA/ukiH//3nz//ufP/+58/6M///yn7//I4//8jj/5QIAAA");
     defer testing.allocator.free(animated);

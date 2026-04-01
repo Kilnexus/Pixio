@@ -8,7 +8,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/Pixio.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = if (target.result.os.tag == .windows) true else null,
     });
+    if (target.result.os.tag == .windows) {
+        pixio_mod.linkSystemLibrary("ole32", .{});
+        pixio_mod.linkSystemLibrary("windowscodecs", .{});
+    }
 
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
