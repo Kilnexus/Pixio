@@ -17,7 +17,7 @@ All decoders return RGB8 output. Alpha is reported by probe APIs where available
 
 | Format | Decode support | Notes |
 | --- | --- | --- |
-| PNG | Partial | 8-bit grayscale, palette, gray+alpha, RGB, RGBA; supports standard and Adam7 interlaced images |
+| PNG | Partial | 1/2/4/8-bit grayscale and palette, plus 8-bit gray+alpha, RGB, RGBA; supports standard and Adam7 interlaced images |
 | BMP | Partial | Uncompressed 24-bit and 32-bit BMP |
 | JPEG | Partial | Baseline and progressive 8-bit JPEG; grayscale or 3-component scans |
 | GIF | Partial | Palette GIF decode of the first image frame |

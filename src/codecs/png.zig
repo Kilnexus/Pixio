@@ -86,22 +86,39 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     if (idat.items.len == 0) return error.MissingPngIdat;
     if (!seen_iend) return error.MissingPngIend;
     if (compression_method != 0 or filter_method != 0) return error.InvalidPngData;
-    if (bit_depth != 8) return error.UnsupportedPngBitDepth;
     if (interlace_method > 1) return error.UnsupportedPngInterlace;
 
-    const src_channels = switch (color_type) {
-        0 => @as(usize, 1),
-        3 => @as(usize, 1),
-        2 => @as(usize, 3),
-        4 => @as(usize, 2),
-        6 => @as(usize, 4),
+    const layout = switch (color_type) {
+        0 => switch (bit_depth) {
+            1, 2, 4 => PngLayout{ .src_channels = 1, .raw_stride = 1, .bytes_per_pixel = 1, .packed_samples = true },
+            8 => PngLayout{ .src_channels = 1, .raw_stride = 1, .bytes_per_pixel = 1, .packed_samples = false },
+            else => return error.UnsupportedPngBitDepth,
+        },
+        3 => switch (bit_depth) {
+            1, 2, 4 => PngLayout{ .src_channels = 1, .raw_stride = 1, .bytes_per_pixel = 1, .packed_samples = true },
+            8 => PngLayout{ .src_channels = 1, .raw_stride = 1, .bytes_per_pixel = 1, .packed_samples = false },
+            else => return error.UnsupportedPngBitDepth,
+        },
+        2 => switch (bit_depth) {
+            8 => PngLayout{ .src_channels = 3, .raw_stride = 3, .bytes_per_pixel = 3, .packed_samples = false },
+            else => return error.UnsupportedPngBitDepth,
+        },
+        4 => switch (bit_depth) {
+            8 => PngLayout{ .src_channels = 2, .raw_stride = 2, .bytes_per_pixel = 2, .packed_samples = false },
+            else => return error.UnsupportedPngBitDepth,
+        },
+        6 => switch (bit_depth) {
+            8 => PngLayout{ .src_channels = 4, .raw_stride = 4, .bytes_per_pixel = 4, .packed_samples = false },
+            else => return error.UnsupportedPngBitDepth,
+        },
         else => return error.UnsupportedPngColorType,
     };
+    const scanline_len = pngScanlineLen(width, bit_depth, layout.src_channels, layout.packed_samples);
     if (color_type == 3 and palette == null) return error.MissingPngPalette;
     const expected_unfiltered_len = if (interlace_method == 0)
-        height * (1 + width * src_channels)
+        height * (1 + scanline_len)
     else
-        adam7InflatedLen(width, height, src_channels);
+        adam7InflatedLen(width, height, bit_depth, layout.src_channels, layout.packed_samples);
 
     var in_reader: std.Io.Reader = .fixed(idat.items);
     var out: std.Io.Writer.Allocating = .init(allocator);
@@ -111,14 +128,23 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     const inflated = out.written();
     if (inflated.len != expected_unfiltered_len) return error.InvalidPngData;
 
-    var raw = try allocator.alloc(u8, height * width * src_channels);
+    var raw = try allocator.alloc(u8, height * width * layout.raw_stride);
     defer allocator.free(raw);
 
-    if (interlace_method == 0) {
-        const scanline_len = width * src_channels;
-        unfilter(raw, inflated, height, scanline_len, src_channels) catch return error.InvalidPngFilter;
+    if (interlace_method == 0 and !layout.packed_samples) {
+        unfilter(raw, inflated, height, scanline_len, layout.bytes_per_pixel) catch return error.InvalidPngFilter;
+    } else if (interlace_method == 0) {
+        const packed_rows = try allocator.alloc(u8, height * scanline_len);
+        defer allocator.free(packed_rows);
+        unfilter(packed_rows, inflated, height, scanline_len, layout.bytes_per_pixel) catch return error.InvalidPngFilter;
+        unpackPackedSamples(raw, packed_rows, width, height, bit_depth, color_type);
+    } else if (!layout.packed_samples) {
+        unfilterAdam7(allocator, raw, inflated, width, height, bit_depth, layout.src_channels, layout.bytes_per_pixel) catch |err| switch (err) {
+            error.InvalidPngFilter => return error.InvalidPngFilter,
+            else => return error.InvalidPngData,
+        };
     } else {
-        unfilterAdam7(allocator, raw, inflated, width, height, src_channels) catch |err| switch (err) {
+        unpackAdam7PackedSamples(allocator, raw, inflated, width, height, bit_depth, color_type) catch |err| switch (err) {
             error.InvalidPngFilter => return error.InvalidPngFilter,
             else => return error.InvalidPngData,
         };
@@ -129,7 +155,7 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
 
     for (0..height) |y| {
         for (0..width) |x| {
-            const src_index = (y * width + x) * src_channels;
+            const src_index = (y * width + x) * layout.raw_stride;
             const dst_index = image.pixelIndex(x, y, 0);
             switch (color_type) {
                 0 => {
@@ -210,7 +236,9 @@ fn unfilterAdam7(
     inflated: []const u8,
     width: usize,
     height: usize,
+    bit_depth: u8,
     src_channels: usize,
+    bytes_per_pixel: usize,
 ) !void {
     @memset(dst, 0);
 
@@ -220,7 +248,7 @@ fn unfilterAdam7(
         const pass_height = adam7PassExtent(height, pass.start_y, pass.step_y);
         if (pass_width == 0 or pass_height == 0) continue;
 
-        const scanline_len = pass_width * src_channels;
+        const scanline_len = pngScanlineLen(pass_width, bit_depth, src_channels, false);
         const pass_inflated_len = pass_height * (1 + scanline_len);
         if (src_offset + pass_inflated_len > inflated.len) return error.InvalidPngData;
 
@@ -229,7 +257,7 @@ fn unfilterAdam7(
 
         const pass_raw = try allocator.alloc(u8, pass_height * scanline_len);
         defer allocator.free(pass_raw);
-        try unfilter(pass_raw, pass_inflated, pass_height, scanline_len, src_channels);
+        try unfilter(pass_raw, pass_inflated, pass_height, scanline_len, bytes_per_pixel);
 
         for (0..pass_height) |pass_y| {
             const dst_y = pass.start_y + pass_y * pass.step_y;
@@ -245,16 +273,96 @@ fn unfilterAdam7(
     if (src_offset != inflated.len) return error.InvalidPngData;
 }
 
-fn adam7InflatedLen(width: usize, height: usize, src_channels: usize) usize {
+fn unpackAdam7PackedSamples(
+    allocator: std.mem.Allocator,
+    dst: []u8,
+    inflated: []const u8,
+    width: usize,
+    height: usize,
+    bit_depth: u8,
+    color_type: u8,
+) !void {
+    @memset(dst, 0);
+
+    var src_offset: usize = 0;
+    for (adam7_passes) |pass| {
+        const pass_width = adam7PassExtent(width, pass.start_x, pass.step_x);
+        const pass_height = adam7PassExtent(height, pass.start_y, pass.step_y);
+        if (pass_width == 0 or pass_height == 0) continue;
+
+        const scanline_len = pngScanlineLen(pass_width, bit_depth, 1, true);
+        const pass_inflated_len = pass_height * (1 + scanline_len);
+        if (src_offset + pass_inflated_len > inflated.len) return error.InvalidPngData;
+
+        const pass_inflated = inflated[src_offset .. src_offset + pass_inflated_len];
+        src_offset += pass_inflated_len;
+
+        const pass_raw = try allocator.alloc(u8, pass_height * scanline_len);
+        defer allocator.free(pass_raw);
+        try unfilter(pass_raw, pass_inflated, pass_height, scanline_len, 1);
+
+        for (0..pass_height) |pass_y| {
+            const row = pass_raw[pass_y * scanline_len .. (pass_y + 1) * scanline_len];
+            const dst_y = pass.start_y + pass_y * pass.step_y;
+            for (0..pass_width) |pass_x| {
+                const dst_x = pass.start_x + pass_x * pass.step_x;
+                dst[dst_y * width + dst_x] = decodePackedSample(row, pass_x, bit_depth, color_type == 0);
+            }
+        }
+    }
+
+    if (src_offset != inflated.len) return error.InvalidPngData;
+}
+
+fn adam7InflatedLen(width: usize, height: usize, bit_depth: u8, src_channels: usize, packed_samples: bool) usize {
     var total: usize = 0;
     for (adam7_passes) |pass| {
         const pass_width = adam7PassExtent(width, pass.start_x, pass.step_x);
         const pass_height = adam7PassExtent(height, pass.start_y, pass.step_y);
         if (pass_width == 0 or pass_height == 0) continue;
-        total += pass_height * (1 + pass_width * src_channels);
+        total += pass_height * (1 + pngScanlineLen(pass_width, bit_depth, src_channels, packed_samples));
     }
     return total;
 }
+
+fn unpackPackedSamples(
+    dst: []u8,
+    packed_rows: []const u8,
+    width: usize,
+    height: usize,
+    bit_depth: u8,
+    color_type: u8,
+) void {
+    const scanline_len = pngScanlineLen(width, bit_depth, 1, true);
+    for (0..height) |y| {
+        const row = packed_rows[y * scanline_len .. (y + 1) * scanline_len];
+        for (0..width) |x| {
+            dst[y * width + x] = decodePackedSample(row, x, bit_depth, color_type == 0);
+        }
+    }
+}
+
+fn decodePackedSample(row: []const u8, x: usize, bit_depth: u8, scale_grayscale: bool) u8 {
+    const samples_per_byte = 8 / bit_depth;
+    const byte = row[x / samples_per_byte];
+    const shift = @as(u3, @intCast((samples_per_byte - 1 - (x % samples_per_byte)) * bit_depth));
+    const mask: u8 = (@as(u8, 1) << @intCast(bit_depth)) - 1;
+    const sample = (byte >> shift) & mask;
+    if (!scale_grayscale or bit_depth == 8) return sample;
+    return @intCast((@as(u16, sample) * 255) / mask);
+}
+
+fn pngScanlineLen(width: usize, bit_depth: u8, src_channels: usize, packed_samples: bool) usize {
+    if (!packed_samples) return width * src_channels;
+    return std.math.divCeil(usize, width * bit_depth, 8) catch unreachable;
+}
+
+const PngLayout = struct {
+    src_channels: usize,
+    raw_stride: usize,
+    bytes_per_pixel: usize,
+    packed_samples: bool,
+};
 
 fn adam7PassExtent(full: usize, start: usize, step: usize) usize {
     if (full <= start) return 0;

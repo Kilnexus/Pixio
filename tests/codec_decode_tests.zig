@@ -121,6 +121,25 @@ test "decodeRgb8 decodes interlaced png" {
     }, image.data);
 }
 
+test "decodeRgb8 decodes 2-bit grayscale png" {
+    const testing = std.testing;
+
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAQAAAABAgAAAACW50iwAAAACklEQVR4nGOQBgAAHQAcjvT1IQAAAABJRU5ErkJggg==");
+    defer testing.allocator.free(png);
+
+    var image = try imaging.decodeRgb8(testing.allocator, png);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 4), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        0, 0, 0,
+        85, 85, 85,
+        170, 170, 170,
+        255, 255, 255,
+    }, image.data);
+}
+
 test "decodeRgb8 decodes gray-alpha png" {
     const testing = std.testing;
 
@@ -133,6 +152,25 @@ test "decodeRgb8 decodes gray-alpha png" {
     try testing.expectEqual(@as(usize, 2), image.width);
     try testing.expectEqual(@as(usize, 1), image.height);
     try testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255, 0, 0, 0 }, image.data);
+}
+
+test "decodeRgb8 decodes 4-bit palette png" {
+    const testing = std.testing;
+
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAQAAAABBAMAAAALEhL+AAAADFBMVEX/AAAA/wAAAP/////7AGD2AAAAC0lEQVR4nGNgVAYAACgAJTrDFe8AAAAASUVORK5CYII=");
+    defer testing.allocator.free(png);
+
+    var image = try imaging.decodeRgb8(testing.allocator, png);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 4), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        255, 0, 0,
+        0, 255, 0,
+        0, 0, 255,
+        255, 255, 255,
+    }, image.data);
 }
 
 test "decodeRgb8 decodes palette png" {
