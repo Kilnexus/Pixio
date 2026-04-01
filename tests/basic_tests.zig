@@ -34,6 +34,29 @@ test "letterboxImage computes centered padding" {
     try testing.expectEqual(@as(usize, 40), boxed.info.pad_top);
 }
 
+test "resize and letterbox reject invalid dimensions" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 4, 3, 3);
+    defer src.deinit();
+    src.fill(10);
+
+    try testing.expectError(error.InvalidImageDimensions, imaging.resizeBilinear(testing.allocator, &src, 0, 6));
+    try testing.expectError(error.InvalidImageDimensions, imaging.letterboxImage(testing.allocator, &src, 0, 160, 114));
+
+    var empty = [_]u8{};
+    const invalid_src = imaging.ImageU8{
+        .allocator = testing.allocator,
+        .width = 0,
+        .height = 3,
+        .channels = 3,
+        .data = empty[0..],
+    };
+
+    try testing.expectError(error.InvalidImageDimensions, imaging.resizeBilinear(testing.allocator, &invalid_src, 8, 6));
+    try testing.expectError(error.InvalidImageDimensions, imaging.letterboxImage(testing.allocator, &invalid_src, 160, 160, 114));
+}
+
 test "detectFormat recognizes png and bmp signatures" {
     const testing = std.testing;
 

@@ -10,6 +10,7 @@ pub fn resizeBilinear(
     target_width: usize,
     target_height: usize,
 ) !ImageU8 {
+    if (src.width == 0 or src.height == 0) return error.InvalidImageDimensions;
     if (src.channels == 0) return error.InvalidChannelCount;
 
     var dst = try ImageU8.init(allocator, target_width, target_height, src.channels);

@@ -34,6 +34,11 @@ pub fn letterbox(
     dst_height: usize,
     pad_value: u8,
 ) !LetterboxedImage {
+    if (src.width == 0 or src.height == 0 or dst_width == 0 or dst_height == 0) {
+        return error.InvalidImageDimensions;
+    }
+    if (src.channels == 0) return error.InvalidChannelCount;
+
     const scale = @min(
         @as(f32, @floatFromInt(dst_width)) / @as(f32, @floatFromInt(src.width)),
         @as(f32, @floatFromInt(dst_height)) / @as(f32, @floatFromInt(src.height)),
