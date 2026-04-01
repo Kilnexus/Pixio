@@ -52,13 +52,22 @@ test "decodeRgb8 decodes baseline jpeg" {
     try testing.expect(!std.mem.eql(u8, image.data[0..3], image.data[3..6]));
 }
 
-test "decodeRgb8 rejects progressive jpeg" {
+test "decodeRgb8 decodes progressive jpeg" {
     const testing = std.testing;
 
     const jpeg = try helpers.decodeBase64Alloc(testing.allocator, "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wgARCAABAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAVAQEBAAAAAAAAAAAAAAAAAAAFBv/aAAwDAQACEAMQAAABigy4/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABAH/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPxB//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPxB//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxB//9k=");
     defer testing.allocator.free(jpeg);
 
-    try testing.expectError(error.UnsupportedJpegFrame, imaging.decodeRgb8(testing.allocator, jpeg));
+    var image = try imaging.decodeRgb8(testing.allocator, jpeg);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(@as(usize, 3), image.channels);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        254, 0, 0,
+        254, 0, 0,
+    }, image.data);
 }
 
 test "decodeRgb8 decodes palette gif" {
@@ -110,6 +119,34 @@ test "decodeRgb8 decodes interlaced png" {
         0, 0, 255,
         255, 255, 255,
     }, image.data);
+}
+
+test "decodeRgb8 decodes gray-alpha png" {
+    const testing = std.testing;
+
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAQAAABeK7cBAAAADUlEQVR4nGP4/5+hAQAHfgJ/pSPAfwAAAABJRU5ErkJggg==");
+    defer testing.allocator.free(png);
+
+    var image = try imaging.decodeRgb8(testing.allocator, png);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255, 0, 0, 0 }, image.data);
+}
+
+test "decodeRgb8 decodes palette png" {
+    const testing = std.testing;
+
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAMAAADD/I+4AAAABlBMVEX/AAAA/wDSh+9xAAAAC0lEQVR4nGNgYAQAAAQAAr96P0oAAAAASUVORK5CYII=");
+    defer testing.allocator.free(png);
+
+    var image = try imaging.decodeRgb8(testing.allocator, png);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0, 0, 255, 0 }, image.data);
 }
 
 test "decodeRgb8 decodes png-backed ico" {

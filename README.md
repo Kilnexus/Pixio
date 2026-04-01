@@ -17,16 +17,16 @@ All decoders return RGB8 output. Alpha is reported by probe APIs where available
 
 | Format | Decode support | Notes |
 | --- | --- | --- |
-| PNG | Partial | 8-bit grayscale, RGB, RGBA; supports standard and Adam7 interlaced images |
+| PNG | Partial | 8-bit grayscale, palette, gray+alpha, RGB, RGBA; supports standard and Adam7 interlaced images |
 | BMP | Partial | Uncompressed 24-bit and 32-bit BMP |
-| JPEG | Partial | Baseline SOF0 JPEG; grayscale or 3-component scans |
+| JPEG | Partial | Baseline and progressive 8-bit JPEG; grayscale or 3-component scans |
 | GIF | Partial | Palette GIF decode of the first image frame |
 | ICO | Partial | PNG-backed icons and BMP-backed 24-bit/32-bit icons |
 | WebP | Partial | Lossless VP8L decode only; lossy VP8/VP8X animation decode is not implemented |
 
 ## Probe Support
 
-`probeInfo` is a metadata-oriented shallow probe. It returns width, height, RGB channel count, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP, and it may succeed for files that the current decoders still reject, such as progressive JPEG or lossy WebP.
+`probeInfo` is a metadata-oriented shallow probe. It returns width, height, RGB channel count, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP, and it may succeed for files that the current decoders still reject, such as lossy or animated WebP.
 
 `probeFileInfo` and `probeWebpFileInfo` avoid reading entire files into memory. They read fixed-layout headers directly and scan JPEG/WebP containers incrementally.
 

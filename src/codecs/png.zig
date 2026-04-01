@@ -6,12 +6,14 @@ pub const ImageU8 = types.ImageU8;
 pub const PngError = types.ImageError || error{
     InvalidPngSignature,
     InvalidPngChunk,
+    InvalidPngPalette,
     UnsupportedPngBitDepth,
     UnsupportedPngColorType,
     UnsupportedPngInterlace,
     MissingPngIhdr,
     MissingPngIdat,
     MissingPngIend,
+    MissingPngPalette,
     InvalidPngCrc,
     InvalidPngFilter,
     InvalidPngDimensions,
@@ -34,6 +36,7 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     var interlace_method: u8 = 0;
     var seen_ihdr = false;
     var seen_iend = false;
+    var palette: ?[]const u8 = null;
 
     var idat = std.ArrayListUnmanaged(u8).empty;
     defer if (idat.items.len > 0) idat.deinit(allocator);
@@ -66,6 +69,11 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
             filter_method = chunk_data[11];
             interlace_method = chunk_data[12];
             seen_ihdr = true;
+        } else if (std.mem.eql(u8, chunk_type, "PLTE")) {
+            if (chunk_data.len == 0 or chunk_data.len % 3 != 0 or chunk_data.len > 256 * 3) {
+                return error.InvalidPngPalette;
+            }
+            palette = chunk_data;
         } else if (std.mem.eql(u8, chunk_type, "IDAT")) {
             try idat.appendSlice(allocator, chunk_data);
         } else if (std.mem.eql(u8, chunk_type, "IEND")) {
@@ -83,10 +91,13 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
 
     const src_channels = switch (color_type) {
         0 => @as(usize, 1),
+        3 => @as(usize, 1),
         2 => @as(usize, 3),
+        4 => @as(usize, 2),
         6 => @as(usize, 4),
         else => return error.UnsupportedPngColorType,
     };
+    if (color_type == 3 and palette == null) return error.MissingPngPalette;
     const expected_unfiltered_len = if (interlace_method == 0)
         height * (1 + width * src_channels)
     else
@@ -127,8 +138,19 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
                     image.data[dst_index + 1] = g;
                     image.data[dst_index + 2] = g;
                 },
+                3 => {
+                    const palette_index = @as(usize, raw[src_index]) * 3;
+                    if (palette_index + 2 >= palette.?.len) return error.InvalidPngPalette;
+                    @memcpy(image.data[dst_index .. dst_index + 3], palette.?[palette_index .. palette_index + 3]);
+                },
                 2 => {
                     @memcpy(image.data[dst_index .. dst_index + 3], raw[src_index .. src_index + 3]);
+                },
+                4 => {
+                    const g = raw[src_index];
+                    image.data[dst_index] = g;
+                    image.data[dst_index + 1] = g;
+                    image.data[dst_index + 2] = g;
                 },
                 6 => {
                     @memcpy(image.data[dst_index .. dst_index + 3], raw[src_index .. src_index + 3]);

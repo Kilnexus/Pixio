@@ -51,22 +51,14 @@ test "probeWebpInfo distinguishes lossless and lossy bitstreams" {
     try testing.expect(!lossy_info.is_animated);
 }
 
-test "probeInfo reports metadata for decode-unsupported variants" {
+test "probeInfo reports metadata for webp decode-unsupported variants" {
     const testing = std.testing;
-
-    const progressive_jpeg = try helpers.decodeBase64Alloc(testing.allocator, "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wgARCAABAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAVAQEBAAAAAAAAAAAAAAAAAAAFBv/aAAwDAQACEAMQAAABigy4/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABAH/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPxB//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPxB//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxB//9k=");
-    defer testing.allocator.free(progressive_jpeg);
 
     const lossy_webp = try helpers.decodeBase64Alloc(testing.allocator, "UklGRkgAAABXRUJQVlA4IDwAAAAwAgCdASoCAAEAAAAAJaACdLoB+AADIQb7gAD5f/8uv//vTP/5zIj//2Z7/Znv9me/+zPf/maJjmP16AA=");
     defer testing.allocator.free(lossy_webp);
 
     const animated_webp = try helpers.decodeBase64Alloc(testing.allocator, "UklGRsoAAABXRUJQVlA4WAoAAAACAAAAAAAAAAAAQU5JTQYAAAAAAAAAAABBTk1GSgAAAAAAAAAAAAAAAAAAAGQAAAJWUDggMgAAADABAJ0BKgEAAQABQCYloAADcAD+8ut///mwP/bz/wR6Af//0uD//pcH//S4P/SkAAAAQU5NRkwAAAAAAAAAAAAAAAAAAABkAAAAVlA4IDQAAAA0AQCdASoBAAEAAAAmJaAAA3AA/ukiH//3nz//ufP/+58/6M///yn7//I4//8jj/5QIAAA");
     defer testing.allocator.free(animated_webp);
-
-    const jpeg_info = try imaging.probeInfo(progressive_jpeg);
-    try testing.expectEqual(imaging.ImageFormat.jpeg, jpeg_info.format);
-    try testing.expectEqual(@as(usize, 2), jpeg_info.width);
-    try testing.expectEqual(@as(usize, 1), jpeg_info.height);
 
     const lossy_info = try imaging.probeInfo(lossy_webp);
     try testing.expectEqual(imaging.ImageFormat.webp, lossy_info.format);

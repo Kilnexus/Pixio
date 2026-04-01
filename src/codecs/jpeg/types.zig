@@ -80,6 +80,7 @@ pub const Frame = struct {
     component_count: usize = 0,
     max_h: u8 = 0,
     max_v: u8 = 0,
+    progressive: bool = false,
 };
 
 pub const ScanComponent = struct {
