@@ -1,5 +1,6 @@
 const std = @import("std");
 const resize = @import("resize.zig");
+const crop = @import("crop.zig");
 const types = @import("types.zig");
 
 pub const ImageU8 = types.ImageU8;
@@ -22,6 +23,29 @@ pub const LetterboxedImage = struct {
     info: LetterboxInfo,
 
     pub fn deinit(self: *LetterboxedImage) void {
+        self.image.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const CoverInfo = struct {
+    src_width: usize,
+    src_height: usize,
+    dst_width: usize,
+    dst_height: usize,
+    resized_width: usize,
+    resized_height: usize,
+    crop_left: usize,
+    crop_top: usize,
+    scale_x: f32,
+    scale_y: f32,
+};
+
+pub const CoveredImage = struct {
+    image: ImageU8,
+    info: CoverInfo,
+
+    pub fn deinit(self: *CoveredImage) void {
         self.image.deinit();
         self.* = undefined;
     }
@@ -74,6 +98,48 @@ pub fn letterbox(
             .resized_height = resized_height,
             .pad_left = pad_left,
             .pad_top = pad_top,
+            .scale_x = @as(f32, @floatFromInt(resized_width)) / @as(f32, @floatFromInt(src.width)),
+            .scale_y = @as(f32, @floatFromInt(resized_height)) / @as(f32, @floatFromInt(src.height)),
+        },
+    };
+}
+
+pub fn cover(
+    allocator: std.mem.Allocator,
+    src: *const ImageU8,
+    dst_width: usize,
+    dst_height: usize,
+) !CoveredImage {
+    if (src.width == 0 or src.height == 0 or dst_width == 0 or dst_height == 0) {
+        return error.InvalidImageDimensions;
+    }
+    if (src.channels == 0) return error.InvalidChannelCount;
+
+    const scale = @max(
+        @as(f32, @floatFromInt(dst_width)) / @as(f32, @floatFromInt(src.width)),
+        @as(f32, @floatFromInt(dst_height)) / @as(f32, @floatFromInt(src.height)),
+    );
+    const resized_width = @max(@as(usize, 1), @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(src.width)) * scale))));
+    const resized_height = @max(@as(usize, 1), @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(src.height)) * scale))));
+    const crop_left = (resized_width - dst_width) / 2;
+    const crop_top = (resized_height - dst_height) / 2;
+
+    var resized = try resize.resizeBilinear(allocator, src, resized_width, resized_height);
+    defer resized.deinit();
+
+    const covered = try crop.crop(allocator, &resized, crop_left, crop_top, dst_width, dst_height);
+
+    return .{
+        .image = covered,
+        .info = .{
+            .src_width = src.width,
+            .src_height = src.height,
+            .dst_width = dst_width,
+            .dst_height = dst_height,
+            .resized_width = resized_width,
+            .resized_height = resized_height,
+            .crop_left = crop_left,
+            .crop_top = crop_top,
             .scale_x = @as(f32, @floatFromInt(resized_width)) / @as(f32, @floatFromInt(src.width)),
             .scale_y = @as(f32, @floatFromInt(resized_height)) / @as(f32, @floatFromInt(src.height)),
         },

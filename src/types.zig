@@ -3,6 +3,7 @@ const std = @import("std");
 pub const ImageError = error{
     InvalidImageDimensions,
     InvalidChannelCount,
+    InvalidCropBounds,
     ShapeMismatch,
 };
 

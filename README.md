@@ -9,8 +9,9 @@
 - Format probe and metadata inspection
 - WebP lossless inspection helpers
 - Bilinear resize
+- Crop and aspect-fill cover resize
 - Letterbox utilities
-- Box remap helpers (letterboxed image -> source coordinates)
+- Box remap helpers (letterboxed/covered image -> source coordinates)
 
 ## Decode Support Matrix
 
@@ -61,4 +62,10 @@ defer rgb.deinit();
 
 var rgba = try pixio.decodeRgba8(allocator, bytes);
 defer rgba.deinit();
+
+var cropped = try pixio.cropImage(allocator, &rgba, 32, 32, 256, 256);
+defer cropped.deinit();
+
+var covered = try pixio.coverImage(allocator, &cropped, 224, 224);
+defer covered.deinit();
 ```

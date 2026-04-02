@@ -4,6 +4,7 @@ const decode = @import("decode.zig");
 const probe = @import("probe.zig");
 const resize = @import("resize.zig");
 const letterbox = @import("letterbox.zig");
+const crop = @import("crop.zig");
 const geometry = @import("geometry.zig");
 
 pub const ImageError = types.ImageError;
@@ -33,6 +34,9 @@ pub const Vp8lEntropyImageDataHeader = probe.Vp8lEntropyImageDataHeader;
 
 pub const LetterboxInfo = letterbox.LetterboxInfo;
 pub const LetterboxedImage = letterbox.LetterboxedImage;
+pub const CoverInfo = letterbox.CoverInfo;
+pub const CoveredImage = letterbox.CoveredImage;
+pub const CropRect = crop.CropRect;
 pub const BoxF32 = geometry.BoxF32;
 
 pub const detectFormat = format.detectFormat;
@@ -57,5 +61,9 @@ pub const resolveMetaPrefixCode = probe.resolveMetaPrefixCode;
 pub const decodeVp8lSingleGroupArgbAtBitPos = probe.decodeVp8lSingleGroupArgbAtBitPos;
 pub const decodeVp8lPayloadArgb = probe.decodeVp8lPayloadArgb;
 pub const resizeBilinear = resize.resizeBilinear;
+pub const cropImage = crop.crop;
+pub const cropImageRect = crop.cropRect;
 pub const letterboxImage = letterbox.letterbox;
+pub const coverImage = letterbox.cover;
 pub const remapLetterboxedBoxToSource = geometry.remapLetterboxedBoxToSource;
+pub const remapCoveredBoxToSource = geometry.remapCoveredBoxToSource;
