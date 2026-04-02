@@ -43,6 +43,15 @@ const BitReader = struct {
 };
 
 pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeWithChannels(allocator, bytes, 3);
+}
+
+pub fn decodeRgba8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeWithChannels(allocator, bytes, 4);
+}
+
+fn decodeWithChannels(allocator: std.mem.Allocator, bytes: []const u8, output_channels: usize) !ImageU8 {
+    if (output_channels != 3 and output_channels != 4) return error.InvalidChannelCount;
     if (bytes.len < 13) return error.InvalidGifHeader;
     if (!std.mem.eql(u8, bytes[0..6], "GIF87a") and !std.mem.eql(u8, bytes[0..6], "GIF89a")) {
         return error.InvalidGifHeader;
@@ -67,9 +76,13 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
         pos += byte_len;
     }
 
-    var image = try ImageU8.init(allocator, canvas_width, canvas_height, 3);
+    var image = try ImageU8.init(allocator, canvas_width, canvas_height, output_channels);
     errdefer image.deinit();
-    fillBackground(&image, global_color_table, background_index);
+    if (output_channels == 3) {
+        fillBackground(&image, global_color_table, background_index);
+    } else {
+        image.fill(0);
+    }
 
     var control = GraphicControl{};
     var saw_image = false;
@@ -343,6 +356,7 @@ fn blitRow(
         image.data[dst] = color_table[color_offset];
         image.data[dst + 1] = color_table[color_offset + 1];
         image.data[dst + 2] = color_table[color_offset + 2];
+        if (image.channels == 4) image.data[dst + 3] = 0xff;
     }
 }
 

@@ -27,6 +27,18 @@ pub fn argbToRgb8(allocator: std.mem.Allocator, pixels: []const u32, width: usiz
     return image;
 }
 
+pub fn argbToRgba8(allocator: std.mem.Allocator, pixels: []const u32, width: usize, height: usize) !ImageU8 {
+    var image = try ImageU8.init(allocator, width, height, 4);
+    errdefer image.deinit();
+    for (pixels, 0..) |pixel, i| {
+        image.data[i * 4] = @intCast((pixel >> 16) & 0xff);
+        image.data[i * 4 + 1] = @intCast((pixel >> 8) & 0xff);
+        image.data[i * 4 + 2] = @intCast(pixel & 0xff);
+        image.data[i * 4 + 3] = @intCast((pixel >> 24) & 0xff);
+    }
+    return image;
+}
+
 pub fn divRoundUp(num: usize, den: usize) usize {
     return (num + den - 1) / den;
 }

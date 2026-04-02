@@ -5,6 +5,7 @@
 ## Features
 
 - Image decode to RGB8 with explicit format constraints
+- Optional decode to RGBA8 with alpha preservation where supported
 - Format probe and metadata inspection
 - WebP lossless inspection helpers
 - Bilinear resize
@@ -13,7 +14,7 @@
 
 ## Decode Support Matrix
 
-All decoders return RGB8 output. Alpha is reported by probe APIs where available but is not preserved in decode output.
+`decodeRgb8` returns RGB8 output. `decodeRgba8` returns RGBA8 output and preserves alpha for PNG, BMP 32-bit, transparent GIF first frames, ICO, and WebP where the source bitstream exposes it. JPEG decode remains opaque.
 
 | Format | Decode support | Notes |
 | --- | --- | --- |
@@ -26,9 +27,11 @@ All decoders return RGB8 output. Alpha is reported by probe APIs where available
 
 ## Probe Support
 
-`probeInfo` is a metadata-oriented shallow probe. It returns width, height, RGB channel count, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP, and it may succeed for files that the current decoders still reject, such as animated WebP.
+`probeInfo` is a metadata-oriented shallow probe. It returns width, height, default decode channel count, `native_channels`, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP, and it may succeed for files that the current decoders still reject, such as animated WebP.
 
 `probeFileInfo` and `probeWebpFileInfo` avoid reading entire files into memory. They read fixed-layout headers directly and scan JPEG/WebP containers incrementally.
+
+`channels` is aligned with the default `decodeRgb8` output and is therefore always `3` for supported formats. `native_channels` reports the source image's expanded color model, for example grayscale JPEG as `1` or PNG/WebP with alpha as `4`.
 
 ## Build
 
@@ -50,4 +53,12 @@ exe.root_module.addImport("Pixio", pixio_dep.module("Pixio"));
 
 ```zig
 const pixio = @import("Pixio");
+```
+
+```zig
+var rgb = try pixio.decodeRgb8(allocator, bytes);
+defer rgb.deinit();
+
+var rgba = try pixio.decodeRgba8(allocator, bytes);
+defer rgba.deinit();
 ```

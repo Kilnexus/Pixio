@@ -328,3 +328,61 @@ test "decodeRgb8 handles lossy and animated webp" {
     defer testing.allocator.free(animated);
     try testing.expectError(error.UnsupportedWebpAnimation, imaging.decodeRgb8(testing.allocator, animated));
 }
+
+test "decodeRgba8 preserves png transparency" {
+    const testing = std.testing;
+
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAAAnRSTlMAAQGU/a4AAAAKSURBVHicY2gAAACCAIF3zXK2AAAAAElFTkSuQmCC");
+    defer testing.allocator.free(png);
+
+    var image = try imaging.decodeRgba8(testing.allocator, png);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 1), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(@as(usize, 4), image.channels);
+    try testing.expectEqual(@as(u8, 0), image.data[3]);
+}
+
+test "decodeReaderRgba8 reads from std.Io.Reader" {
+    const testing = std.testing;
+
+    const png = try helpers.decodeBase64Alloc(testing.allocator, "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAQAAABeK7cBAAAADUlEQVR4nGP4/5+hAQAHfgJ/pSPAfwAAAABJRU5ErkJggg==");
+    defer testing.allocator.free(png);
+
+    var reader = std.Io.Reader.fixed(png);
+    var image = try imaging.decodeReaderRgba8(testing.allocator, &reader);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(@as(usize, 4), image.channels);
+    try testing.expectEqualSlices(u8, &[_]u8{ 255, 255, 255, 255, 0, 0, 0, 128 }, image.data);
+}
+
+test "decodeFileRgba8 decodes bmp alpha without loading via byte slice API" {
+    const testing = std.testing;
+
+    const path = "._pixio_rgba32.bmp";
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var bmp = [_]u8{
+        0x42, 0x4d, 0x3e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00, 0x00, 0x00,
+        0x28, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x13, 0x0b, 0x00, 0x00,
+        0x13, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xff, 0x40, 0x00, 0xff, 0x00, 0xff,
+    };
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = &bmp });
+
+    var image = try imaging.decodeFileRgba8(testing.allocator, path);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(@as(usize, 4), image.channels);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        255, 0, 0, 64,
+        0, 255, 0, 255,
+    }, image.data);
+}

@@ -30,6 +30,15 @@ const IconDirEntry = struct {
 };
 
 pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeWithChannels(allocator, bytes, 3);
+}
+
+pub fn decodeRgba8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeWithChannels(allocator, bytes, 4);
+}
+
+fn decodeWithChannels(allocator: std.mem.Allocator, bytes: []const u8, output_channels: usize) !ImageU8 {
+    if (output_channels != 3 and output_channels != 4) return error.InvalidChannelCount;
     if (bytes.len < 6) return error.InvalidIcoHeader;
     const reserved = readU16le(bytes[0..2]);
     const image_type = readU16le(bytes[2..4]);
@@ -70,19 +79,22 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
 
     const payload = bytes[entry.image_offset .. entry.image_offset + entry.bytes_in_res];
     if (payload.len >= 8 and std.mem.eql(u8, payload[0..8], "\x89PNG\r\n\x1a\n")) {
-        return png.decodeRgb8(allocator, payload);
+        return if (output_channels == 4)
+            png.decodeRgba8(allocator, payload)
+        else
+            png.decodeRgb8(allocator, payload);
     }
     if (payload.len >= 40) {
         const dib_size = readU32le(payload[0..4]);
         if (dib_size >= 40 and dib_size <= payload.len) {
-            return decodeBmpIconRgb8(allocator, payload);
+            return decodeBmpIconWithChannels(allocator, payload, output_channels);
         }
     }
 
     return error.UnsupportedIcoPayload;
 }
 
-fn decodeBmpIconRgb8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8 {
+fn decodeBmpIconWithChannels(allocator: std.mem.Allocator, payload: []const u8, output_channels: usize) !ImageU8 {
     if (payload.len < 40) return error.InvalidIcoPayload;
 
     const dib_size = readU32le(payload[0..4]);
@@ -117,7 +129,7 @@ fn decodeBmpIconRgb8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8
     const and_size = and_row_stride * height;
     if (and_offset + and_size > payload.len) return error.InvalidIcoPayload;
 
-    var image = try ImageU8.init(allocator, width, height, 3);
+    var image = try ImageU8.init(allocator, width, height, output_channels);
     errdefer image.deinit();
     image.fill(0);
 
@@ -134,13 +146,14 @@ fn decodeBmpIconRgb8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8
             const mask_byte = and_row[x / 8];
             const mask_bit: u8 = @as(u8, 0x80) >> @as(u3, @intCast(x % 8));
             const masked = (mask_byte & mask_bit) != 0;
-            const alpha_zero = bit_count == 32 and xor_row[src_index + 3] == 0;
-            if (masked or alpha_zero) continue;
+            const alpha_value: u8 = if (masked) 0 else if (bit_count == 32) xor_row[src_index + 3] else 0xff;
+            if (alpha_value == 0 and image.channels == 3) continue;
 
             const dst = image.pixelIndex(x, y, 0);
             image.data[dst] = xor_row[src_index + 2];
             image.data[dst + 1] = xor_row[src_index + 1];
             image.data[dst + 2] = xor_row[src_index];
+            if (image.channels == 4) image.data[dst + 3] = alpha_value;
         }
     }
 

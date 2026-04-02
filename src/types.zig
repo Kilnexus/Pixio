@@ -52,3 +52,21 @@ pub const ImageU8 = struct {
         self.data[self.pixelIndex(x, y, channel)] = value;
     }
 };
+
+pub fn toOpaqueRgba8(allocator: std.mem.Allocator, src: *const ImageU8) !ImageU8 {
+    if (src.channels != 3) return error.InvalidChannelCount;
+
+    var dst = try ImageU8.init(allocator, src.width, src.height, 4);
+    errdefer dst.deinit();
+
+    for (0..src.width * src.height) |i| {
+        const src_index = i * 3;
+        const dst_index = i * 4;
+        dst.data[dst_index] = src.data[src_index];
+        dst.data[dst_index + 1] = src.data[src_index + 1];
+        dst.data[dst_index + 2] = src.data[src_index + 2];
+        dst.data[dst_index + 3] = 0xff;
+    }
+
+    return dst;
+}

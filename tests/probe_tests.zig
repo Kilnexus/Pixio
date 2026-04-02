@@ -10,6 +10,7 @@ test "probeInfo reads repository sample png metadata" {
     try testing.expectEqual(@as(usize, 134), info.width);
     try testing.expectEqual(@as(usize, 128), info.height);
     try testing.expectEqual(@as(usize, 3), info.channels);
+    try testing.expectEqual(@as(usize, 3), info.native_channels);
     try testing.expect(!info.has_alpha);
 }
 
@@ -23,6 +24,8 @@ test "probeInfo reports alpha for png tRNS" {
     try testing.expectEqual(imaging.ImageFormat.png, info.format);
     try testing.expectEqual(@as(usize, 1), info.width);
     try testing.expectEqual(@as(usize, 1), info.height);
+    try testing.expectEqual(@as(usize, 3), info.channels);
+    try testing.expectEqual(@as(usize, 4), info.native_channels);
     try testing.expect(info.has_alpha);
 }
 
@@ -38,6 +41,7 @@ test "probeFileInfo reports alpha for png tRNS" {
 
     const info = try imaging.probeFileInfo(testing.allocator, path);
     try testing.expectEqual(imaging.ImageFormat.png, info.format);
+    try testing.expectEqual(@as(usize, 4), info.native_channels);
     try testing.expect(info.has_alpha);
 }
 
@@ -52,7 +56,20 @@ test "probeInfo reads lossless webp metadata" {
     try testing.expectEqual(@as(usize, 2), info.width);
     try testing.expectEqual(@as(usize, 1), info.height);
     try testing.expectEqual(@as(usize, 3), info.channels);
+    try testing.expectEqual(@as(usize, 3), info.native_channels);
     try testing.expect(!info.has_alpha);
+}
+
+test "probeInfo separates default output channels from native alpha channels" {
+    const testing = std.testing;
+
+    const webp = try helpers.decodeBase64Alloc(testing.allocator, "UklGRhwAAABXRUJQVlA4TA8AAAAvAAAAEAcQ/Y8CBiKi/wEA");
+    defer testing.allocator.free(webp);
+
+    const info = try imaging.probeInfo(webp);
+    try testing.expectEqual(@as(usize, 3), info.channels);
+    try testing.expectEqual(@as(usize, 4), info.native_channels);
+    try testing.expect(info.has_alpha);
 }
 
 test "probeWebpInfo distinguishes lossless and lossy bitstreams" {

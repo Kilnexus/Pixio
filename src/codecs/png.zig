@@ -23,6 +23,15 @@ pub const PngError = types.ImageError || error{
 const PngSignature = "\x89PNG\r\n\x1a\n";
 
 pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeWithChannels(allocator, bytes, 3);
+}
+
+pub fn decodeRgba8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeWithChannels(allocator, bytes, 4);
+}
+
+fn decodeWithChannels(allocator: std.mem.Allocator, bytes: []const u8, output_channels: usize) !ImageU8 {
+    if (output_channels != 3 and output_channels != 4) return error.InvalidChannelCount;
     if (bytes.len < PngSignature.len or !std.mem.eql(u8, bytes[0..PngSignature.len], PngSignature)) {
         return error.InvalidPngSignature;
     }
@@ -37,6 +46,7 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     var seen_ihdr = false;
     var seen_iend = false;
     var palette: ?[]const u8 = null;
+    var transparency: ?[]const u8 = null;
 
     var idat = std.ArrayListUnmanaged(u8).empty;
     defer if (idat.items.len > 0) idat.deinit(allocator);
@@ -74,6 +84,8 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
                 return error.InvalidPngPalette;
             }
             palette = chunk_data;
+        } else if (std.mem.eql(u8, chunk_type, "tRNS")) {
+            transparency = chunk_data;
         } else if (std.mem.eql(u8, chunk_type, "IDAT")) {
             try idat.appendSlice(allocator, chunk_data);
         } else if (std.mem.eql(u8, chunk_type, "IEND")) {
@@ -150,7 +162,7 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
         };
     }
 
-    var image = try ImageU8.init(allocator, width, height, 3);
+    var image = try ImageU8.init(allocator, width, height, output_channels);
     errdefer image.deinit();
 
     for (0..height) |y| {
@@ -163,29 +175,75 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
                     image.data[dst_index] = g;
                     image.data[dst_index + 1] = g;
                     image.data[dst_index + 2] = g;
+                    if (output_channels == 4) {
+                        image.data[dst_index + 3] = grayscaleAlpha(g, transparency, bit_depth);
+                    }
                 },
                 3 => {
-                    const palette_index = @as(usize, raw[src_index]) * 3;
+                    const palette_entry = raw[src_index];
+                    const palette_index = @as(usize, palette_entry) * 3;
                     if (palette_index + 2 >= palette.?.len) return error.InvalidPngPalette;
                     @memcpy(image.data[dst_index .. dst_index + 3], palette.?[palette_index .. palette_index + 3]);
+                    if (output_channels == 4) {
+                        image.data[dst_index + 3] = paletteAlpha(palette_entry, transparency);
+                    }
                 },
                 2 => {
                     @memcpy(image.data[dst_index .. dst_index + 3], raw[src_index .. src_index + 3]);
+                    if (output_channels == 4) {
+                        image.data[dst_index + 3] = rgbAlpha(raw[src_index .. src_index + 3], transparency);
+                    }
                 },
                 4 => {
                     const g = raw[src_index];
                     image.data[dst_index] = g;
                     image.data[dst_index + 1] = g;
                     image.data[dst_index + 2] = g;
+                    if (output_channels == 4) {
+                        image.data[dst_index + 3] = raw[src_index + 1];
+                    }
                 },
                 6 => {
                     @memcpy(image.data[dst_index .. dst_index + 3], raw[src_index .. src_index + 3]);
+                    if (output_channels == 4) {
+                        image.data[dst_index + 3] = raw[src_index + 3];
+                    }
                 },
                 else => unreachable,
             }
         }
     }
     return image;
+}
+
+fn grayscaleAlpha(value: u8, transparency: ?[]const u8, bit_depth: u8) u8 {
+    if (transparency == null or transparency.?.len != 2) return 0xff;
+    const transparent_value = readU16be(transparency.?[0..2]);
+    const scaled_value = if (bit_depth == 8)
+        @as(u8, @intCast(transparent_value >> 8))
+    else
+        scaleSample(@intCast(transparent_value), bit_depth);
+    return if (value == scaled_value) 0 else 0xff;
+}
+
+fn rgbAlpha(rgb: []const u8, transparency: ?[]const u8) u8 {
+    if (transparency == null or transparency.?.len != 6) return 0xff;
+    const red = @as(u8, @intCast(readU16be(transparency.?[0..2]) >> 8));
+    const green = @as(u8, @intCast(readU16be(transparency.?[2..4]) >> 8));
+    const blue = @as(u8, @intCast(readU16be(transparency.?[4..6]) >> 8));
+    return if (rgb[0] == red and rgb[1] == green and rgb[2] == blue) 0 else 0xff;
+}
+
+fn paletteAlpha(index: u8, transparency: ?[]const u8) u8 {
+    if (transparency == null) return 0xff;
+    if (@as(usize, index) >= transparency.?.len) return 0xff;
+    return transparency.?[@intCast(index)];
+}
+
+fn scaleSample(sample: u8, bit_depth: u8) u8 {
+    if (bit_depth == 8) return sample;
+    const mask: u16 = (@as(u16, 1) << @intCast(bit_depth)) - 1;
+    return @intCast((@as(u16, sample) * 255) / mask);
 }
 
 fn unfilter(
@@ -349,7 +407,7 @@ fn decodePackedSample(row: []const u8, x: usize, bit_depth: u8, scale_grayscale:
     const mask: u8 = (@as(u8, 1) << @intCast(bit_depth)) - 1;
     const sample = (byte >> shift) & mask;
     if (!scale_grayscale or bit_depth == 8) return sample;
-    return @intCast((@as(u16, sample) * 255) / mask);
+    return scaleSample(sample, bit_depth);
 }
 
 fn pngScanlineLen(width: usize, bit_depth: u8, src_channels: usize, packed_samples: bool) usize {
@@ -398,4 +456,8 @@ fn paeth(a: u8, b: u8, c: u8) u8 {
 
 fn readU32be(bytes: []const u8) usize {
     return @intCast(std.mem.readInt(u32, bytes[0..4], .big));
+}
+
+fn readU16be(bytes: []const u8) u16 {
+    return std.mem.readInt(u16, bytes[0..2], .big);
 }

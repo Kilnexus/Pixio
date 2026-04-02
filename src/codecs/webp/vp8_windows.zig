@@ -8,6 +8,19 @@ const types = @import("types.zig");
 pub const ImageU8 = types.ImageU8;
 
 pub fn decodeContainerRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeContainerWithFormat(allocator, bytes, &c.GUID_WICPixelFormat24bppRGB, 3);
+}
+
+pub fn decodeContainerRgba8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeContainerWithFormat(allocator, bytes, &c.GUID_WICPixelFormat32bppRGBA, 4);
+}
+
+fn decodeContainerWithFormat(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    pixel_format: *const c.GUID,
+    channels: usize,
+) !ImageU8 {
     const init_hr = c.CoInitializeEx(null, c.COINIT_MULTITHREADED);
     const should_uninit = init_hr >= 0;
     if (hrFailed(init_hr) and init_hr != c.RPC_E_CHANGED_MODE) return error.UnsupportedWebpBitstream;
@@ -52,7 +65,7 @@ pub fn decodeContainerRgb8(allocator: std.mem.Allocator, bytes: []const u8) !Ima
     if (hrFailed(converter.?.lpVtbl.*.Initialize.?(
         converter,
         @ptrCast(frame),
-        &c.GUID_WICPixelFormat24bppRGB,
+        pixel_format,
         c.WICBitmapDitherTypeNone,
         null,
         0.0,
@@ -64,7 +77,7 @@ pub fn decodeContainerRgb8(allocator: std.mem.Allocator, bytes: []const u8) !Ima
     if (hrFailed(converter.?.lpVtbl.*.GetSize.?(@ptrCast(converter), &width, &height))) return error.InvalidWebpData;
     if (width == 0 or height == 0) return error.InvalidWebpData;
 
-    var image = try ImageU8.init(allocator, width, height, 3);
+    var image = try ImageU8.init(allocator, width, height, channels);
     errdefer image.deinit();
 
     const stride = image.width * image.channels;

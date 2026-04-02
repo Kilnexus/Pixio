@@ -16,6 +16,7 @@ pub const ImageInfo = struct {
     width: usize,
     height: usize,
     channels: usize,
+    native_channels: usize,
     has_alpha: bool,
 };
 
@@ -76,7 +77,7 @@ pub fn probeFileInfo(allocator: std.mem.Allocator, path: []const u8) !ImageInfo 
         .png => try probePngFile(file),
         .bmp => try probeBmp(bytes),
         .jpeg => try probeJpegFile(file),
-        .gif => try probeGif(bytes),
+        .gif => try probeGifFile(file),
         .ico => try probeIcoFile(allocator, file),
         .webp => try probeWebpImageFile(file),
         else => error.UnsupportedImageFormat,
@@ -227,6 +228,7 @@ fn probePng(bytes: []const u8) !ImageInfo {
         .width = width,
         .height = height,
         .channels = 3,
+        .native_channels = if (pngHasNativeAlpha(color_type, has_alpha)) 4 else pngNativeChannels(color_type),
         .has_alpha = has_alpha,
     };
 }
@@ -243,23 +245,36 @@ fn probeBmp(bytes: []const u8) !ImageInfo {
         .width = @intCast(@abs(width_i)),
         .height = @intCast(@abs(height_i)),
         .channels = 3,
+        .native_channels = if (bit_count == 32) 4 else 3,
         .has_alpha = bit_count == 32,
     };
 }
 
 fn probeGif(bytes: []const u8) !ImageInfo {
-    if (bytes.len < 10) return error.InvalidGifHeader;
+    if (bytes.len < 13) return error.InvalidGifHeader;
 
     const width = readU16le(bytes[6..8]);
     const height = readU16le(bytes[8..10]);
     if (width == 0 or height == 0) return error.InvalidGifDimensions;
+
+    var pos: usize = 10;
+    const packed_fields = bytes[pos];
+    pos += 1;
+    const has_global_color_table = (packed_fields & 0x80) != 0;
+    const global_color_table_size = if (has_global_color_table) @as(usize, 1) << @intCast((packed_fields & 0x07) + 1) else 0;
+    pos += 2;
+    if (pos + global_color_table_size * 3 > bytes.len) return error.InvalidGifData;
+    pos += global_color_table_size * 3;
+
+    const has_alpha = try scanGifTransparencyBytes(bytes, pos);
 
     return .{
         .format = .gif,
         .width = width,
         .height = height,
         .channels = 3,
-        .has_alpha = false,
+        .native_channels = if (has_alpha) 4 else 3,
+        .has_alpha = has_alpha,
     };
 }
 
@@ -296,6 +311,7 @@ fn probeIco(bytes: []const u8) !ImageInfo {
         .width = best_width,
         .height = best_height,
         .channels = 3,
+        .native_channels = if (best_alpha) 4 else 3,
         .has_alpha = best_alpha,
     };
 }
@@ -328,7 +344,8 @@ fn probeJpeg(bytes: []const u8) !ImageInfo {
                 .format = .jpeg,
                 .width = width,
                 .height = height,
-                .channels = if (components == 1) 1 else 3,
+                .channels = 3,
+                .native_channels = if (components == 1) 1 else 3,
                 .has_alpha = false,
             };
         }
@@ -346,6 +363,7 @@ fn probeWebp(bytes: []const u8) !ImageInfo {
         .width = info.width,
         .height = info.height,
         .channels = 3,
+        .native_channels = if (info.has_alpha) 4 else 3,
         .has_alpha = info.has_alpha,
     };
 }
@@ -392,6 +410,7 @@ fn probePngFile(file: std.fs.File) !ImageInfo {
         .width = width,
         .height = height,
         .channels = 3,
+        .native_channels = if (pngHasNativeAlpha(color_type, has_alpha)) 4 else pngNativeChannels(color_type),
         .has_alpha = has_alpha,
     };
 }
@@ -464,7 +483,8 @@ fn probeJpegFile(file: std.fs.File) !ImageInfo {
                 .format = .jpeg,
                 .width = width,
                 .height = height,
-                .channels = if (components == 1) 1 else 3,
+                .channels = 3,
+                .native_channels = if (components == 1) 1 else 3,
                 .has_alpha = false,
             };
         }
@@ -553,7 +573,131 @@ fn probeWebpImageFile(file: std.fs.File) !ImageInfo {
         .width = info.width,
         .height = info.height,
         .channels = 3,
+        .native_channels = if (info.has_alpha) 4 else 3,
         .has_alpha = info.has_alpha,
+    };
+}
+
+fn probeGifFile(file: std.fs.File) !ImageInfo {
+    var header: [13]u8 = undefined;
+    if (try file.preadAll(&header, 0) < header.len) return error.InvalidGifHeader;
+    if (!std.mem.eql(u8, header[0..6], "GIF87a") and !std.mem.eql(u8, header[0..6], "GIF89a")) {
+        return error.InvalidGifHeader;
+    }
+
+    const width = readU16le(header[6..8]);
+    const height = readU16le(header[8..10]);
+    if (width == 0 or height == 0) return error.InvalidGifDimensions;
+
+    const packed_fields = header[10];
+    var pos: u64 = 13;
+    const has_global_color_table = (packed_fields & 0x80) != 0;
+    const global_color_table_size = if (has_global_color_table) @as(u64, 1) << @intCast((packed_fields & 0x07) + 1) else 0;
+    pos += global_color_table_size * 3;
+
+    const has_alpha = try scanGifTransparencyFile(file, pos);
+
+    return .{
+        .format = .gif,
+        .width = width,
+        .height = height,
+        .channels = 3,
+        .native_channels = if (has_alpha) 4 else 3,
+        .has_alpha = has_alpha,
+    };
+}
+
+fn scanGifTransparencyBytes(bytes: []const u8, start_pos: usize) !bool {
+    var pos = start_pos;
+    while (pos < bytes.len) {
+        const sentinel = bytes[pos];
+        pos += 1;
+        switch (sentinel) {
+            0x21 => {
+                if (pos >= bytes.len) return error.InvalidGifData;
+                const label = bytes[pos];
+                pos += 1;
+                if (label == 0xF9) {
+                    if (pos + 6 > bytes.len) return error.InvalidGifData;
+                    const block_size = bytes[pos];
+                    if (block_size != 4) return error.InvalidGifBlock;
+                    const packed_fields = bytes[pos + 1];
+                    pos += 6;
+                    if ((packed_fields & 0x01) != 0) return true;
+                } else {
+                    pos = try skipGifSubBlocksBytes(bytes, pos);
+                }
+            },
+            0x2C, 0x3B => break,
+            else => return error.InvalidGifBlock,
+        }
+    }
+    return false;
+}
+
+fn scanGifTransparencyFile(file: std.fs.File, start_pos: u64) !bool {
+    var pos = start_pos;
+    while (true) {
+        const sentinel = try readByteAt(file, pos) orelse return error.InvalidGifData;
+        pos += 1;
+        switch (sentinel) {
+            0x21 => {
+                const label = try readByteAt(file, pos) orelse return error.InvalidGifData;
+                pos += 1;
+                if (label == 0xF9) {
+                    var control: [6]u8 = undefined;
+                    if (try file.preadAll(&control, pos) < control.len) return error.InvalidGifData;
+                    if (control[0] != 4) return error.InvalidGifBlock;
+                    pos += control.len;
+                    if ((control[1] & 0x01) != 0) return true;
+                } else {
+                    pos = try skipGifSubBlocksFile(file, pos);
+                }
+            },
+            0x2C, 0x3B => break,
+            else => return error.InvalidGifBlock,
+        }
+    }
+    return false;
+}
+
+fn skipGifSubBlocksBytes(bytes: []const u8, start_pos: usize) !usize {
+    var pos = start_pos;
+    while (true) {
+        if (pos >= bytes.len) return error.InvalidGifData;
+        const block_len = bytes[pos];
+        pos += 1;
+        if (block_len == 0) break;
+        if (pos + block_len > bytes.len) return error.InvalidGifData;
+        pos += block_len;
+    }
+    return pos;
+}
+
+fn skipGifSubBlocksFile(file: std.fs.File, start_pos: u64) !u64 {
+    var pos = start_pos;
+    while (true) {
+        const block_len = try readByteAt(file, pos) orelse return error.InvalidGifData;
+        pos += 1;
+        if (block_len == 0) break;
+        pos += block_len;
+    }
+    return pos;
+}
+
+fn pngHasNativeAlpha(color_type: u8, has_alpha: bool) bool {
+    return switch (color_type) {
+        4, 6 => true,
+        0, 2, 3 => has_alpha,
+        else => false,
+    };
+}
+
+fn pngNativeChannels(color_type: u8) usize {
+    return switch (color_type) {
+        0, 4 => 1,
+        2, 3, 6 => 3,
+        else => 3,
     };
 }
 

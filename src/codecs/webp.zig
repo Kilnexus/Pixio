@@ -53,6 +53,7 @@ const planeCodeToDistance = prefix_codes.planeCodeToDistance;
 const packArgb = color_cache_mod.packArgb;
 const updateColorCache = color_cache_mod.updateColorCache;
 const argbToRgb8 = color_cache_mod.argbToRgb8;
+const argbToRgba8 = color_cache_mod.argbToRgba8;
 const divRoundUp = color_cache_mod.divRoundUp;
 const colorIndexWidthBits = color_cache_mod.colorIndexWidthBits;
 const applySupportedTransformsInPlace = transforms_mod.applySupportedTransformsInPlace;
@@ -73,10 +74,30 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     };
 }
 
+pub fn decodeRgba8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    const scan = try probe.scanChunks(bytes);
+    if (scan.info.is_animated) return error.UnsupportedWebpAnimation;
+    return switch (scan.primary.tag) {
+        .vp8 => if (builtin.os.tag == .windows)
+            vp8_windows.decodeContainerRgba8(allocator, bytes)
+        else
+            error.UnsupportedWebpBitstream,
+        .vp8l => decodeVp8lRgba8(allocator, scan.primary.payload),
+        .vp8x => error.UnsupportedWebpBitstream,
+        else => error.MissingWebpChunk,
+    };
+}
+
 fn decodeVp8lRgb8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8 {
     var argb = try decodeVp8lPayloadArgb(allocator, payload);
     defer argb.deinit();
     return argbToRgb8(allocator, argb.pixels, argb.width, argb.height);
+}
+
+fn decodeVp8lRgba8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8 {
+    var argb = try decodeVp8lPayloadArgb(allocator, payload);
+    defer argb.deinit();
+    return argbToRgba8(allocator, argb.pixels, argb.width, argb.height);
 }
 
 pub fn probeInfo(bytes: []const u8) !WebpInfo {

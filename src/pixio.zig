@@ -37,7 +37,11 @@ pub const BoxF32 = geometry.BoxF32;
 
 pub const detectFormat = format.detectFormat;
 pub const decodeRgb8 = decode.decodeRgb8;
+pub const decodeRgba8 = decode.decodeRgba8;
+pub const decodeReaderRgb8 = decode.decodeReaderRgb8;
+pub const decodeReaderRgba8 = decode.decodeReaderRgba8;
 pub const decodeFileRgb8 = decode.decodeFileRgb8;
+pub const decodeFileRgba8 = decode.decodeFileRgba8;
 pub const probeInfo = probe.probeInfo;
 pub const probeFileInfo = probe.probeFileInfo;
 pub const probeWebpInfo = probe.probeWebpInfo;
