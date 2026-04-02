@@ -10,8 +10,10 @@
 - WebP lossless inspection helpers
 - Bilinear resize
 - Crop and aspect-fill cover resize
+- Pad, flip, and 90-degree rotation helpers
 - Letterbox utilities
 - Box remap helpers (letterboxed/covered image -> source coordinates)
+- Float32 CHW tensor packing with normalization options
 
 ## Decode Support Matrix
 
@@ -68,4 +70,10 @@ defer cropped.deinit();
 
 var covered = try pixio.coverImage(allocator, &cropped, 224, 224);
 defer covered.deinit();
+
+var tensor = try pixio.imageToTensorChwF32(allocator, &covered.image, .{
+    .mean = &[_]f32{ 0.485, 0.456, 0.406 },
+    .std = &[_]f32{ 0.229, 0.224, 0.225 },
+});
+defer tensor.deinit();
 ```

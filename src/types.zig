@@ -4,6 +4,7 @@ pub const ImageError = error{
     InvalidImageDimensions,
     InvalidChannelCount,
     InvalidCropBounds,
+    InvalidNormalizationSpec,
     ShapeMismatch,
 };
 
@@ -71,3 +72,16 @@ pub fn toOpaqueRgba8(allocator: std.mem.Allocator, src: *const ImageU8) !ImageU8
 
     return dst;
 }
+
+pub const TensorF32CHW = struct {
+    allocator: std.mem.Allocator,
+    channels: usize,
+    height: usize,
+    width: usize,
+    data: []f32,
+
+    pub fn deinit(self: *TensorF32CHW) void {
+        self.allocator.free(self.data);
+        self.* = undefined;
+    }
+};

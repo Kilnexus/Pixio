@@ -73,6 +73,119 @@ test "coverImage scales and center crops" {
     try testing.expectEqualSlices(u8, &[_]u8{ 10, 20, 50, 60 }, covered.image.data);
 }
 
+test "padImage adds constant border" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 1, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 10, 20 });
+
+    var padded = try imaging.padImage(testing.allocator, &src, 1, 1, 1, 0, 3);
+    defer padded.deinit();
+
+    try testing.expectEqual(@as(usize, 4), padded.width);
+    try testing.expectEqual(@as(usize, 2), padded.height);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        3, 3, 3, 3,
+        3, 10, 20, 3,
+    }, padded.data);
+}
+
+test "flipImageHorizontal mirrors rows" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 1, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2, 3 });
+
+    var flipped = try imaging.flipImageHorizontal(testing.allocator, &src);
+    defer flipped.deinit();
+
+    try testing.expectEqualSlices(u8, &[_]u8{ 3, 2, 1 }, flipped.data);
+}
+
+test "flipImageVertical mirrors columns" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 2, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2, 3, 4 });
+
+    var flipped = try imaging.flipImageVertical(testing.allocator, &src);
+    defer flipped.deinit();
+
+    try testing.expectEqualSlices(u8, &[_]u8{ 3, 4, 1, 2 }, flipped.data);
+}
+
+test "rotateImage90Cw rotates clockwise" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 3, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2, 3, 4, 5, 6 });
+
+    var rotated = try imaging.rotateImage90Cw(testing.allocator, &src);
+    defer rotated.deinit();
+
+    try testing.expectEqual(@as(usize, 3), rotated.width);
+    try testing.expectEqual(@as(usize, 2), rotated.height);
+    try testing.expectEqualSlices(u8, &[_]u8{ 5, 3, 1, 6, 4, 2 }, rotated.data);
+}
+
+test "rotateImage90Ccw rotates counter-clockwise" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 3, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2, 3, 4, 5, 6 });
+
+    var rotated = try imaging.rotateImage90Ccw(testing.allocator, &src);
+    defer rotated.deinit();
+
+    try testing.expectEqual(@as(usize, 3), rotated.width);
+    try testing.expectEqual(@as(usize, 2), rotated.height);
+    try testing.expectEqualSlices(u8, &[_]u8{ 2, 4, 6, 1, 3, 5 }, rotated.data);
+}
+
+test "imageToTensorChwF32 packs channels-first normalized floats" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 1, 3);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{
+        10, 20, 30,
+        40, 50, 60,
+    });
+
+    var tensor = try imaging.imageToTensorChwF32(testing.allocator, &src, .{
+        .scale = 1.0,
+        .mean = &[_]f32{ 1.0, 2.0, 3.0 },
+        .std = &[_]f32{ 1.0, 2.0, 4.0 },
+    });
+    defer tensor.deinit();
+
+    try testing.expectEqual(@as(usize, 3), tensor.channels);
+    try testing.expectEqual(@as(usize, 1), tensor.height);
+    try testing.expectEqual(@as(usize, 2), tensor.width);
+    try testing.expectEqualSlices(f32, &[_]f32{
+        9.0, 39.0,
+        9.0, 24.0,
+        6.75, 14.25,
+    }, tensor.data);
+}
+
+test "imageToTensorChwF32 validates normalization vector lengths" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 1, 1, 3);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2, 3 });
+
+    try testing.expectError(error.InvalidNormalizationSpec, imaging.imageToTensorChwF32(testing.allocator, &src, .{
+        .mean = &[_]f32{ 0.0, 1.0 },
+    }));
+}
+
 test "remapCoveredBoxToSource accounts for crop offsets" {
     const testing = std.testing;
 
@@ -113,6 +226,9 @@ test "resize and letterbox reject invalid dimensions" {
     try testing.expectError(error.InvalidImageDimensions, imaging.resizeBilinear(testing.allocator, &invalid_src, 8, 6));
     try testing.expectError(error.InvalidImageDimensions, imaging.letterboxImage(testing.allocator, &invalid_src, 160, 160, 114));
     try testing.expectError(error.InvalidImageDimensions, imaging.coverImage(testing.allocator, &invalid_src, 160, 160));
+    try testing.expectError(error.InvalidImageDimensions, imaging.padImage(testing.allocator, &invalid_src, 1, 1, 1, 1, 0));
+    try testing.expectError(error.InvalidImageDimensions, imaging.flipImageHorizontal(testing.allocator, &invalid_src));
+    try testing.expectError(error.InvalidImageDimensions, imaging.rotateImage90Cw(testing.allocator, &invalid_src));
     try testing.expectError(error.InvalidCropBounds, imaging.cropImage(testing.allocator, &src, 3, 2, 2, 2));
 }
 
