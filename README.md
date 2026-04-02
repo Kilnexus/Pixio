@@ -13,7 +13,7 @@
 - JPEG encode for `gray8` / `rgb8` / `rgba8` with quality control
 - Pixel-format conversion between `gray8` / `rgb8` / `rgba8`
 - RGBA premultiply / unpremultiply and alpha-over compositing
-- Nearest, bilinear, and area resize
+- Nearest, bilinear, area, bicubic, and Lanczos3 resize
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
 - Letterbox utilities

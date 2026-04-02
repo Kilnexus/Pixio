@@ -107,6 +107,55 @@ test "resizeArea averages each channel independently" {
     try testing.expectEqualSlices(u8, &[_]u8{ 139, 30, 60 }, dst.data);
 }
 
+test "resizeBicubic identity preserves pixel data" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 2, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 5, 25, 125, 200, 220, 240 });
+
+    var dst = try imaging.resizeBicubic(testing.allocator, &src, 3, 2);
+    defer dst.deinit();
+
+    try testing.expectEqualSlices(u8, src.data, dst.data);
+}
+
+test "resizeLanczos3 identity preserves pixel data" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 2, 3);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{
+        10, 20, 30, 40, 50, 60, 70, 80, 90,
+        15, 25, 35, 45, 55, 65, 75, 85, 95,
+    });
+
+    var dst = try imaging.resizeLanczos3(testing.allocator, &src, 3, 2);
+    defer dst.deinit();
+
+    try testing.expectEqualSlices(u8, src.data, dst.data);
+}
+
+test "resizeBicubic and resizeLanczos3 preserve constant images" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 2, 1);
+    defer src.deinit();
+    src.fill(77);
+
+    var bicubic = try imaging.resizeBicubic(testing.allocator, &src, 5, 4);
+    defer bicubic.deinit();
+    try testing.expectEqual(@as(usize, 5), bicubic.width);
+    try testing.expectEqual(@as(usize, 4), bicubic.height);
+    for (bicubic.data) |value| try testing.expectEqual(@as(u8, 77), value);
+
+    var lanczos = try imaging.resizeLanczos3(testing.allocator, &src, 5, 4);
+    defer lanczos.deinit();
+    try testing.expectEqual(@as(usize, 5), lanczos.width);
+    try testing.expectEqual(@as(usize, 4), lanczos.height);
+    for (lanczos.data) |value| try testing.expectEqual(@as(u8, 77), value);
+}
+
 test "letterboxImage computes centered padding" {
     const testing = std.testing;
 
@@ -414,6 +463,8 @@ test "resize and letterbox reject invalid dimensions" {
     try testing.expectError(error.InvalidImageDimensions, imaging.resizeNearest(testing.allocator, &src, 0, 6));
     try testing.expectError(error.InvalidImageDimensions, imaging.resizeBilinear(testing.allocator, &src, 0, 6));
     try testing.expectError(error.InvalidImageDimensions, imaging.resizeArea(testing.allocator, &src, 0, 6));
+    try testing.expectError(error.InvalidImageDimensions, imaging.resizeBicubic(testing.allocator, &src, 0, 6));
+    try testing.expectError(error.InvalidImageDimensions, imaging.resizeLanczos3(testing.allocator, &src, 0, 6));
     try testing.expectError(error.InvalidImageDimensions, imaging.letterboxImage(testing.allocator, &src, 0, 160, 114));
 
     var empty = [_]u8{};
@@ -428,6 +479,8 @@ test "resize and letterbox reject invalid dimensions" {
     try testing.expectError(error.InvalidImageDimensions, imaging.resizeNearest(testing.allocator, &invalid_src, 8, 6));
     try testing.expectError(error.InvalidImageDimensions, imaging.resizeBilinear(testing.allocator, &invalid_src, 8, 6));
     try testing.expectError(error.InvalidImageDimensions, imaging.resizeArea(testing.allocator, &invalid_src, 8, 6));
+    try testing.expectError(error.InvalidImageDimensions, imaging.resizeBicubic(testing.allocator, &invalid_src, 8, 6));
+    try testing.expectError(error.InvalidImageDimensions, imaging.resizeLanczos3(testing.allocator, &invalid_src, 8, 6));
     try testing.expectError(error.InvalidImageDimensions, imaging.letterboxImage(testing.allocator, &invalid_src, 160, 160, 114));
     try testing.expectError(error.InvalidImageDimensions, imaging.coverImage(testing.allocator, &invalid_src, 160, 160));
     try testing.expectError(error.InvalidImageDimensions, imaging.padImage(testing.allocator, &invalid_src, 1, 1, 1, 1, 0));
