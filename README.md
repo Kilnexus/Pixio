@@ -8,6 +8,7 @@
 - Optional decode to RGBA8 with alpha preservation where supported
 - Format probe and metadata inspection
 - WebP lossless inspection helpers
+- Core image metadata types (`PixelFormat`, `ColorSpace`, `AlphaMode`, views/layout)
 - Bilinear resize
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
@@ -76,4 +77,8 @@ var tensor = try pixio.imageToTensorChwF32(allocator, &covered.image, .{
     .std = &[_]f32{ 0.229, 0.224, 0.225 },
 });
 defer tensor.deinit();
+
+const view = try pixio.constImageView(&rgba);
+const descriptor = view.layout.descriptor;
+_ = descriptor.pixel_format;
 ```

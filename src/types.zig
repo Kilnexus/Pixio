@@ -5,6 +5,9 @@ pub const ImageError = error{
     InvalidChannelCount,
     InvalidCropBounds,
     InvalidNormalizationSpec,
+    InvalidPixelFormat,
+    InvalidImageLayout,
+    InvalidImageDescriptor,
     ShapeMismatch,
 };
 

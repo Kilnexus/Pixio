@@ -1,6 +1,51 @@
 const std = @import("std");
 const imaging = @import("Pixio");
 
+test "descriptorForChannels infers canonical pixel metadata" {
+    const testing = std.testing;
+
+    const gray = try imaging.descriptorForChannels(1);
+    try testing.expectEqual(imaging.PixelFormat.gray8, gray.pixel_format);
+    try testing.expectEqual(imaging.AlphaMode.opaque_pixels, gray.alpha_mode);
+
+    const rgba = try imaging.descriptorForChannels(4);
+    try testing.expectEqual(imaging.PixelFormat.rgba8, rgba.pixel_format);
+    try testing.expectEqual(imaging.AlphaMode.straight, rgba.alpha_mode);
+
+    try testing.expectError(error.InvalidPixelFormat, imaging.descriptorForChannels(2));
+}
+
+test "image descriptor validation rejects impossible alpha combinations" {
+    const testing = std.testing;
+
+    try testing.expectError(error.InvalidImageDescriptor, (imaging.ImageDescriptor{
+        .pixel_format = .rgb8,
+        .alpha_mode = .straight,
+    }).validate());
+}
+
+test "constImageView exposes packed layout and subview" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 2, 3);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{
+        1, 2, 3, 4, 5, 6, 7, 8, 9,
+        10, 11, 12, 13, 14, 15, 16, 17, 18,
+    });
+
+    const view = try imaging.constImageView(&src);
+    try testing.expectEqual(@as(usize, 9), view.layout.row_stride);
+    try testing.expectEqual(imaging.PixelFormat.rgb8, view.layout.descriptor.pixel_format);
+    try testing.expectEqualSlices(u8, &[_]u8{ 4, 5, 6 }, view.pixelSlice(1, 0));
+
+    const sub = try view.subview(1, 0, 2, 2);
+    try testing.expectEqual(@as(usize, 2), sub.layout.width);
+    try testing.expectEqual(@as(usize, 2), sub.layout.height);
+    try testing.expectEqualSlices(u8, &[_]u8{ 4, 5, 6, 7, 8, 9 }, sub.row(0));
+    try testing.expectEqualSlices(u8, &[_]u8{ 13, 14, 15, 16, 17, 18 }, sub.row(1));
+}
+
 test "resizeBilinear preserves shape metadata" {
     const testing = std.testing;
 
