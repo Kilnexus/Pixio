@@ -9,6 +9,8 @@
 - Format probe and metadata inspection
 - WebP lossless inspection helpers
 - Core image metadata types (`PixelFormat`, `ColorSpace`, `AlphaMode`, views/layout)
+- PNG encode for `gray8` / `rgb8` / `rgba8`
+- JPEG encode for `gray8` / `rgb8` / `rgba8` with quality control
 - Bilinear resize
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
@@ -81,4 +83,10 @@ defer tensor.deinit();
 const view = try pixio.constImageView(&rgba);
 const descriptor = view.layout.descriptor;
 _ = descriptor.pixel_format;
+
+const encoded_png = try pixio.encodePngAlloc(allocator, &rgba);
+defer allocator.free(encoded_png);
+
+const encoded_jpeg = try pixio.encodeJpegAlloc(allocator, &cropped, .{ .quality = 92 });
+defer allocator.free(encoded_jpeg);
 ```

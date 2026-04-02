@@ -59,12 +59,7 @@ pub fn writeFile(allocator: std.mem.Allocator, path: []const u8, image: *const I
 }
 
 fn buildFilteredScanlines(allocator: std.mem.Allocator, view: ImageConstViewU8) ![]u8 {
-    const filtered_len = filter.filteredScanlineLen(view) * view.layout.height;
-    var out: std.Io.Writer.Allocating = try .initCapacity(allocator, filtered_len);
-    errdefer out.deinit();
-
-    try filter.writeFilteredNone(&out.writer, view);
-    return try out.toOwnedSlice();
+    return filter.buildAdaptiveFiltered(allocator, view);
 }
 
 fn pngColorType(descriptor: ImageDescriptor) !u8 {
