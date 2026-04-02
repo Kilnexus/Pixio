@@ -11,6 +11,8 @@
 - Core image metadata types (`PixelFormat`, `ColorSpace`, `AlphaMode`, views/layout)
 - PNG encode for `gray8` / `rgb8` / `rgba8`
 - JPEG encode for `gray8` / `rgb8` / `rgba8` with quality control
+- Pixel-format conversion between `gray8` / `rgb8` / `rgba8`
+- RGBA premultiply / unpremultiply and alpha-over compositing
 - Bilinear resize
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
@@ -83,6 +85,12 @@ defer tensor.deinit();
 const view = try pixio.constImageView(&rgba);
 const descriptor = view.layout.descriptor;
 _ = descriptor.pixel_format;
+
+var composite_ready = try pixio.convertToRgba8(allocator, &cropped);
+defer composite_ready.deinit();
+
+var premultiplied = try pixio.premultiplyRgba8(allocator, &composite_ready);
+defer premultiplied.deinit();
 
 const encoded_png = try pixio.encodePngAlloc(allocator, &rgba);
 defer allocator.free(encoded_png);

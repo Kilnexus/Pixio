@@ -192,6 +192,95 @@ test "rotateImage90Ccw rotates counter-clockwise" {
     try testing.expectEqualSlices(u8, &[_]u8{ 2, 4, 6, 1, 3, 5 }, rotated.data);
 }
 
+test "convertImage converts gray rgb and rgba layouts" {
+    const testing = std.testing;
+
+    var gray = try imaging.ImageU8.init(testing.allocator, 2, 1, 1);
+    defer gray.deinit();
+    @memcpy(gray.data, &[_]u8{ 20, 200 });
+
+    var rgb = try imaging.convertToRgb8(testing.allocator, &gray);
+    defer rgb.deinit();
+    try testing.expectEqualSlices(u8, &[_]u8{ 20, 20, 20, 200, 200, 200 }, rgb.data);
+
+    var rgba = try imaging.convertToRgba8(testing.allocator, &rgb);
+    defer rgba.deinit();
+    try testing.expectEqualSlices(u8, &[_]u8{ 20, 20, 20, 255, 200, 200, 200, 255 }, rgba.data);
+
+    var roundtrip_gray = try imaging.convertToGray8(testing.allocator, &rgba);
+    defer roundtrip_gray.deinit();
+    try testing.expectEqualSlices(u8, gray.data, roundtrip_gray.data);
+}
+
+test "premultiply and unpremultiply rgba are approximately inverse" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 1, 4);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{
+        255, 128, 0, 128,
+        10, 40, 200, 64,
+    });
+
+    var premultiplied = try imaging.premultiplyRgba8(testing.allocator, &src);
+    defer premultiplied.deinit();
+    try testing.expectEqualSlices(u8, &[_]u8{
+        128, 64, 0, 128,
+        3, 10, 50, 64,
+    }, premultiplied.data);
+
+    var restored = try imaging.unpremultiplyRgba8(testing.allocator, &premultiplied);
+    defer restored.deinit();
+
+    try testing.expectEqual(@as(usize, 4), restored.channels);
+    try testing.expect(pixelMaxAbsDiff(src.data, restored.data) <= 2);
+}
+
+test "compositeOver blends rgba foreground over rgb background" {
+    const testing = std.testing;
+
+    var foreground = try imaging.ImageU8.init(testing.allocator, 2, 1, 4);
+    defer foreground.deinit();
+    @memcpy(foreground.data, &[_]u8{
+        255, 0, 0, 128,
+        0, 255, 0, 64,
+    });
+
+    var background = try imaging.ImageU8.init(testing.allocator, 2, 1, 3);
+    defer background.deinit();
+    @memcpy(background.data, &[_]u8{
+        0, 0, 255,
+        255, 255, 255,
+    });
+
+    var composed = try imaging.compositeOver(testing.allocator, &foreground, &background);
+    defer composed.deinit();
+
+    try testing.expectEqual(@as(usize, 3), composed.channels);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        128, 0, 127,
+        191, 255, 191,
+    }, composed.data);
+}
+
+test "compositeOver preserves rgba output alpha when background has alpha" {
+    const testing = std.testing;
+
+    var foreground = try imaging.ImageU8.init(testing.allocator, 1, 1, 4);
+    defer foreground.deinit();
+    @memcpy(foreground.data, &[_]u8{ 255, 0, 0, 128 });
+
+    var background = try imaging.ImageU8.init(testing.allocator, 1, 1, 4);
+    defer background.deinit();
+    @memcpy(background.data, &[_]u8{ 0, 0, 255, 128 });
+
+    var composed = try imaging.compositeOver(testing.allocator, &foreground, &background);
+    defer composed.deinit();
+
+    try testing.expectEqual(@as(usize, 4), composed.channels);
+    try testing.expectEqualSlices(u8, &[_]u8{ 128, 0, 127, 192 }, composed.data);
+}
+
 test "imageToTensorChwF32 packs channels-first normalized floats" {
     const testing = std.testing;
 
@@ -249,6 +338,26 @@ test "remapCoveredBoxToSource accounts for crop offsets" {
     try testing.expectEqual(@as(f32, 1.0), box.y2);
 }
 
+test "convert and composite validate input contracts" {
+    const testing = std.testing;
+
+    var rgb = try imaging.ImageU8.init(testing.allocator, 1, 1, 3);
+    defer rgb.deinit();
+    @memcpy(rgb.data, &[_]u8{ 1, 2, 3 });
+
+    try testing.expectError(error.InvalidChannelCount, imaging.premultiplyRgba8(testing.allocator, &rgb));
+
+    var fg = try imaging.ImageU8.init(testing.allocator, 1, 1, 4);
+    defer fg.deinit();
+    @memcpy(fg.data, &[_]u8{ 1, 2, 3, 4 });
+
+    var bg = try imaging.ImageU8.init(testing.allocator, 2, 1, 3);
+    defer bg.deinit();
+    @memcpy(bg.data, &[_]u8{ 1, 2, 3, 4, 5, 6 });
+
+    try testing.expectError(error.ShapeMismatch, imaging.compositeOver(testing.allocator, &fg, &bg));
+}
+
 test "resize and letterbox reject invalid dimensions" {
     const testing = std.testing;
 
@@ -286,4 +395,13 @@ test "detectFormat recognizes png and bmp signatures" {
     try testing.expectEqual(imaging.ImageFormat.gif, imaging.detectFormat("GIF89arest"));
     try testing.expectEqual(imaging.ImageFormat.ico, imaging.detectFormat("\x00\x00\x01\x00rest"));
     try testing.expectEqual(imaging.ImageFormat.webp, imaging.detectFormat("RIFF\x1a\x00\x00\x00WEBP"));
+}
+
+fn pixelMaxAbsDiff(lhs: []const u8, rhs: []const u8) u8 {
+    var max_diff: u8 = 0;
+    for (lhs, rhs) |a, b| {
+        const diff: u8 = @intCast(@abs(@as(i16, a) - @as(i16, b)));
+        if (diff > max_diff) max_diff = diff;
+    }
+    return max_diff;
 }
