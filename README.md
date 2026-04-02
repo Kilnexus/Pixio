@@ -14,6 +14,7 @@
 - Pixel-format conversion between `gray8` / `rgb8` / `rgba8`
 - RGBA premultiply / unpremultiply and alpha-over compositing
 - Nearest, bilinear, area, bicubic, and Lanczos3 resize
+- Box blur, gaussian blur, and sharpen filters
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
 - Letterbox utilities

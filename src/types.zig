@@ -4,6 +4,7 @@ pub const ImageError = error{
     InvalidImageDimensions,
     InvalidChannelCount,
     InvalidCropBounds,
+    InvalidFilterParameter,
     InvalidNormalizationSpec,
     InvalidPixelFormat,
     InvalidImageLayout,

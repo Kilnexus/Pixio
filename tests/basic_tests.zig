@@ -156,6 +156,48 @@ test "resizeBicubic and resizeLanczos3 preserve constant images" {
     for (lanczos.data) |value| try testing.expectEqual(@as(u8, 77), value);
 }
 
+test "boxBlur smooths a single impulse" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 1, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 0, 255, 0 });
+
+    var blurred = try imaging.boxBlur(testing.allocator, &src, 1);
+    defer blurred.deinit();
+
+    try testing.expectEqualSlices(u8, &[_]u8{ 85, 85, 85 }, blurred.data);
+}
+
+test "gaussianBlur preserves constant image" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 4, 3, 3);
+    defer src.deinit();
+    src.fill(33);
+
+    var blurred = try imaging.gaussianBlur(testing.allocator, &src, 1.2);
+    defer blurred.deinit();
+
+    try testing.expectEqual(src.width, blurred.width);
+    try testing.expectEqual(src.height, blurred.height);
+    try testing.expectEqual(src.channels, blurred.channels);
+    for (blurred.data) |value| try testing.expectEqual(@as(u8, 33), value);
+}
+
+test "sharpen with zero amount is identity" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 2, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 10, 20, 30, 40 });
+
+    var sharpened = try imaging.sharpen(testing.allocator, &src, 1.0, 0.0);
+    defer sharpened.deinit();
+
+    try testing.expectEqualSlices(u8, src.data, sharpened.data);
+}
+
 test "letterboxImage computes centered padding" {
     const testing = std.testing;
 
@@ -451,6 +493,17 @@ test "convert and composite validate input contracts" {
     @memcpy(bg.data, &[_]u8{ 1, 2, 3, 4, 5, 6 });
 
     try testing.expectError(error.ShapeMismatch, imaging.compositeOver(testing.allocator, &fg, &bg));
+}
+
+test "filters validate parameter contracts" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 1, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2 });
+
+    try testing.expectError(error.InvalidFilterParameter, imaging.gaussianBlur(testing.allocator, &src, 0.0));
+    try testing.expectError(error.InvalidFilterParameter, imaging.sharpen(testing.allocator, &src, 1.0, -0.1));
 }
 
 test "resize and letterbox reject invalid dimensions" {
