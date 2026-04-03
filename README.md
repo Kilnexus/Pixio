@@ -17,6 +17,7 @@
 - Configurable `resizeImage`, plus `fitImage`, `containImage`, and `thumbnailImage`
 - Box blur, gaussian blur, and sharpen filters
 - Median, edge-detect, and emboss filters
+- Unified preprocessing pipeline: `prepareImage` / `prepareTensor`
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
 - Letterbox utilities
@@ -100,6 +101,20 @@ defer thumb.deinit();
 
 var edges = try pixio.edgeDetect(allocator, &thumb);
 defer edges.deinit();
+
+var prepared = try pixio.prepareTensor(allocator, &rgba, .{
+    .target_width = 224,
+    .target_height = 224,
+    .mode = .letterbox,
+    .kernel = .lanczos3,
+    .output_pixel_format = .rgb8,
+    .pad_value = 114,
+    .normalize = .{
+        .mean = &[_]f32{ 0.485, 0.456, 0.406 },
+        .std = &[_]f32{ 0.229, 0.224, 0.225 },
+    },
+});
+defer prepared.deinit();
 
 const encoded_png = try pixio.encodePngAlloc(allocator, &rgba);
 defer allocator.free(encoded_png);
