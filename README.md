@@ -14,7 +14,9 @@
 - Pixel-format conversion between `gray8` / `rgb8` / `rgba8`
 - RGBA premultiply / unpremultiply and alpha-over compositing
 - Nearest, bilinear, area, bicubic, and Lanczos3 resize
+- Configurable `resizeImage`, plus `fitImage`, `containImage`, and `thumbnailImage`
 - Box blur, gaussian blur, and sharpen filters
+- Median, edge-detect, and emboss filters
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
 - Letterbox utilities
@@ -92,6 +94,12 @@ defer composite_ready.deinit();
 
 var premultiplied = try pixio.premultiplyRgba8(allocator, &composite_ready);
 defer premultiplied.deinit();
+
+var thumb = try pixio.thumbnailImage(allocator, &premultiplied, 128, 128, .{ .kernel = .lanczos3 });
+defer thumb.deinit();
+
+var edges = try pixio.edgeDetect(allocator, &thumb);
+defer edges.deinit();
 
 const encoded_png = try pixio.encodePngAlloc(allocator, &rgba);
 defer allocator.free(encoded_png);

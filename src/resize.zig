@@ -4,6 +4,30 @@ const types = @import("types.zig");
 pub const ImageU8 = types.ImageU8;
 pub const ImageError = types.ImageError;
 
+pub const ResizeKernel = enum {
+    nearest,
+    bilinear,
+    area,
+    bicubic,
+    lanczos3,
+};
+
+pub fn resizeWithKernel(
+    allocator: std.mem.Allocator,
+    src: *const ImageU8,
+    target_width: usize,
+    target_height: usize,
+    kernel: ResizeKernel,
+) !ImageU8 {
+    return switch (kernel) {
+        .nearest => resizeNearest(allocator, src, target_width, target_height),
+        .bilinear => resizeBilinear(allocator, src, target_width, target_height),
+        .area => resizeArea(allocator, src, target_width, target_height),
+        .bicubic => resizeBicubic(allocator, src, target_width, target_height),
+        .lanczos3 => resizeLanczos3(allocator, src, target_width, target_height),
+    };
+}
+
 pub fn resizeNearest(
     allocator: std.mem.Allocator,
     src: *const ImageU8,
@@ -125,7 +149,7 @@ pub fn resizeBicubic(
     target_width: usize,
     target_height: usize,
 ) !ImageU8 {
-    return resizeWithKernel(allocator, src, target_width, target_height, 2.0, bicubicKernel);
+    return resizeWithKernelFn(allocator, src, target_width, target_height, 2.0, bicubicKernel);
 }
 
 pub fn resizeLanczos3(
@@ -134,14 +158,14 @@ pub fn resizeLanczos3(
     target_width: usize,
     target_height: usize,
 ) !ImageU8 {
-    return resizeWithKernel(allocator, src, target_width, target_height, 3.0, lanczos3Kernel);
+    return resizeWithKernelFn(allocator, src, target_width, target_height, 3.0, lanczos3Kernel);
 }
 
 fn lerp(a: f32, b: f32, t: f32) f32 {
     return a + (b - a) * t;
 }
 
-fn resizeWithKernel(
+fn resizeWithKernelFn(
     allocator: std.mem.Allocator,
     src: *const ImageU8,
     target_width: usize,

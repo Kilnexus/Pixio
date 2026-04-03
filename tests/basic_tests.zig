@@ -156,6 +156,63 @@ test "resizeBicubic and resizeLanczos3 preserve constant images" {
     for (lanczos.data) |value| try testing.expectEqual(@as(u8, 77), value);
 }
 
+test "resizeImage dispatches to requested kernel" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 4, 1, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 10, 20, 30, 40 });
+
+    var dst = try imaging.resizeImage(testing.allocator, &src, 2, 1, .nearest);
+    defer dst.deinit();
+
+    try testing.expectEqualSlices(u8, &[_]u8{ 20, 40 }, dst.data);
+}
+
+test "fitImage resizes to exact shape with configurable kernel" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 2, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 0, 100, 150, 255 });
+
+    var fit = try imaging.fitImage(testing.allocator, &src, 4, 1, .{ .kernel = .nearest });
+    defer fit.deinit();
+
+    try testing.expectEqual(@as(usize, 4), fit.width);
+    try testing.expectEqual(@as(usize, 1), fit.height);
+    try testing.expectEqualSlices(u8, &[_]u8{ 150, 150, 255, 255 }, fit.data);
+}
+
+test "containImage preserves aspect ratio within bounds" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 8, 4, 1);
+    defer src.deinit();
+    src.fill(9);
+
+    var contained = try imaging.containImage(testing.allocator, &src, 5, 5, .{ .kernel = .nearest });
+    defer contained.deinit();
+
+    try testing.expectEqual(@as(usize, 5), contained.width);
+    try testing.expectEqual(@as(usize, 3), contained.height);
+}
+
+test "thumbnailImage never upscales source" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 2, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2, 3, 4, 5, 6 });
+
+    var thumb = try imaging.thumbnailImage(testing.allocator, &src, 10, 10, .{ .kernel = .lanczos3 });
+    defer thumb.deinit();
+
+    try testing.expectEqual(src.width, thumb.width);
+    try testing.expectEqual(src.height, thumb.height);
+    try testing.expectEqualSlices(u8, src.data, thumb.data);
+}
+
 test "boxBlur smooths a single impulse" {
     const testing = std.testing;
 
@@ -196,6 +253,55 @@ test "sharpen with zero amount is identity" {
     defer sharpened.deinit();
 
     try testing.expectEqualSlices(u8, src.data, sharpened.data);
+}
+
+test "medianFilter removes isolated impulse noise" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 3, 1);
+    defer src.deinit();
+    src.fill(0);
+    src.data[4] = 255;
+
+    var filtered = try imaging.medianFilter(testing.allocator, &src, 1);
+    defer filtered.deinit();
+
+    try testing.expectEqual(@as(u8, 0), filtered.data[4]);
+}
+
+test "edgeDetect highlights strong gradients" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 3, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{
+        0, 0, 255,
+        0, 0, 255,
+        0, 0, 255,
+    });
+
+    var edges = try imaging.edgeDetect(testing.allocator, &src);
+    defer edges.deinit();
+
+    try testing.expect(edges.data[1] > 0);
+    try testing.expect(edges.data[4] > 0);
+}
+
+test "emboss adds directional relief response" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 3, 3, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{
+        0, 64, 128,
+        64, 128, 192,
+        128, 192, 255,
+    });
+
+    var embossed = try imaging.emboss(testing.allocator, &src);
+    defer embossed.deinit();
+
+    try testing.expect(embossed.data[4] > 128);
 }
 
 test "letterboxImage computes centered padding" {
@@ -504,6 +610,18 @@ test "filters validate parameter contracts" {
 
     try testing.expectError(error.InvalidFilterParameter, imaging.gaussianBlur(testing.allocator, &src, 0.0));
     try testing.expectError(error.InvalidFilterParameter, imaging.sharpen(testing.allocator, &src, 1.0, -0.1));
+}
+
+test "fit and contain validate dimension contracts" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 1, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2 });
+
+    try testing.expectError(error.InvalidImageDimensions, imaging.fitImage(testing.allocator, &src, 0, 1, .{}));
+    try testing.expectError(error.InvalidImageDimensions, imaging.containImage(testing.allocator, &src, 0, 1, .{}));
+    try testing.expectError(error.InvalidImageDimensions, imaging.thumbnailImage(testing.allocator, &src, 1, 0, .{}));
 }
 
 test "resize and letterbox reject invalid dimensions" {

@@ -66,6 +66,123 @@ pub fn sharpen(
     return dst;
 }
 
+pub fn medianFilter(
+    allocator: std.mem.Allocator,
+    src: *const ImageU8,
+    radius: usize,
+) !ImageU8 {
+    try validateFilterInputs(src);
+    if (radius == 0) return cloneImage(allocator, src);
+
+    const window_len = (radius * 2 + 1) * (radius * 2 + 1);
+    var values = try allocator.alloc(u8, window_len);
+    defer allocator.free(values);
+
+    var dst = try ImageU8.init(allocator, src.width, src.height, src.channels);
+    errdefer dst.deinit();
+
+    for (0..src.height) |y| {
+        for (0..src.width) |x| {
+            for (0..src.channels) |channel| {
+                var count: usize = 0;
+                var sy_i: isize = @intCast(y);
+                sy_i -= @intCast(radius);
+                while (sy_i <= @as(isize, @intCast(y + radius))) : (sy_i += 1) {
+                    const sy = clampSignedIndex(sy_i, src.height);
+                    var sx_i: isize = @intCast(x);
+                    sx_i -= @intCast(radius);
+                    while (sx_i <= @as(isize, @intCast(x + radius))) : (sx_i += 1) {
+                        const sx = clampSignedIndex(sx_i, src.width);
+                        values[count] = src.get(sx, sy, channel);
+                        count += 1;
+                    }
+                }
+
+                std.mem.sort(u8, values[0..count], {}, comptime std.sort.asc(u8));
+                dst.set(x, y, channel, values[count / 2]);
+            }
+        }
+    }
+
+    return dst;
+}
+
+pub fn edgeDetect(
+    allocator: std.mem.Allocator,
+    src: *const ImageU8,
+) !ImageU8 {
+    try validateFilterInputs(src);
+
+    var dst = try ImageU8.init(allocator, src.width, src.height, src.channels);
+    errdefer dst.deinit();
+
+    const gx_kernel = [3][3]i32{
+        .{ -1, 0, 1 },
+        .{ -2, 0, 2 },
+        .{ -1, 0, 1 },
+    };
+    const gy_kernel = [3][3]i32{
+        .{ -1, -2, -1 },
+        .{ 0, 0, 0 },
+        .{ 1, 2, 1 },
+    };
+
+    for (0..src.height) |y| {
+        for (0..src.width) |x| {
+            for (0..src.channels) |channel| {
+                var gx: f32 = 0.0;
+                var gy: f32 = 0.0;
+                for (0..3) |ky| {
+                    const sy = clampSignedIndex(@as(isize, @intCast(y)) + @as(isize, @intCast(ky)) - 1, src.height);
+                    for (0..3) |kx| {
+                        const sx = clampSignedIndex(@as(isize, @intCast(x)) + @as(isize, @intCast(kx)) - 1, src.width);
+                        const sample = @as(f32, @floatFromInt(src.get(sx, sy, channel)));
+                        gx += sample * @as(f32, @floatFromInt(gx_kernel[ky][kx]));
+                        gy += sample * @as(f32, @floatFromInt(gy_kernel[ky][kx]));
+                    }
+                }
+                dst.set(x, y, channel, clampToU8(@sqrt(gx * gx + gy * gy)));
+            }
+        }
+    }
+
+    return dst;
+}
+
+pub fn emboss(
+    allocator: std.mem.Allocator,
+    src: *const ImageU8,
+) !ImageU8 {
+    try validateFilterInputs(src);
+
+    var dst = try ImageU8.init(allocator, src.width, src.height, src.channels);
+    errdefer dst.deinit();
+
+    const kernel = [3][3]i32{
+        .{ -2, -1, 0 },
+        .{ -1, 1, 1 },
+        .{ 0, 1, 2 },
+    };
+
+    for (0..src.height) |y| {
+        for (0..src.width) |x| {
+            for (0..src.channels) |channel| {
+                var sum: f32 = 128.0;
+                for (0..3) |ky| {
+                    const sy = clampSignedIndex(@as(isize, @intCast(y)) + @as(isize, @intCast(ky)) - 1, src.height);
+                    for (0..3) |kx| {
+                        const sx = clampSignedIndex(@as(isize, @intCast(x)) + @as(isize, @intCast(kx)) - 1, src.width);
+                        sum += @as(f32, @floatFromInt(src.get(sx, sy, channel))) * @as(f32, @floatFromInt(kernel[ky][kx]));
+                    }
+                }
+                dst.set(x, y, channel, clampToU8(sum));
+            }
+        }
+    }
+
+    return dst;
+}
+
 fn validateFilterInputs(src: *const ImageU8) !void {
     if (src.width == 0 or src.height == 0) return error.InvalidImageDimensions;
     if (src.channels == 0) return error.InvalidChannelCount;
@@ -188,6 +305,13 @@ fn clampOffset(index_plus_offset: usize, radius: usize, upper: usize) usize {
     const max_index: isize = @intCast(upper - 1);
     if (signed > max_index) return upper - 1;
     return @intCast(signed);
+}
+
+fn clampSignedIndex(value: isize, upper: usize) usize {
+    if (value < 0) return 0;
+    const upper_index: isize = @intCast(upper - 1);
+    if (value > upper_index) return upper - 1;
+    return @intCast(value);
 }
 
 fn clampToU8(value: f32) u8 {
