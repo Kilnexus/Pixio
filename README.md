@@ -18,6 +18,7 @@
 - Box blur, gaussian blur, and sharpen filters
 - Median, edge-detect, and emboss filters
 - Unified preprocessing pipeline: `prepareImage` / `prepareTensor`
+- Batch preprocessing and source-box remap helpers
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
 - Letterbox utilities
@@ -115,6 +116,9 @@ var prepared = try pixio.prepareTensor(allocator, &rgba, .{
     },
 });
 defer prepared.deinit();
+
+var box = pixio.BoxF32{ .x1 = 32, .y1 = 40, .x2 = 160, .y2 = 180 };
+pixio.remapPreprocessedBoxToSource(&box, prepared.info);
 
 const encoded_png = try pixio.encodePngAlloc(allocator, &rgba);
 defer allocator.free(encoded_png);

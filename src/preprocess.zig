@@ -1,5 +1,6 @@
 const std = @import("std");
 const convert = @import("convert.zig");
+const geometry = @import("geometry.zig");
 const fit_mod = @import("fit.zig");
 const resize = @import("resize.zig");
 const tensor = @import("tensor.zig");
@@ -11,11 +12,13 @@ pub const TensorF32CHW = types.TensorF32CHW;
 pub const PixelFormat = pixel.PixelFormat;
 pub const ResizeKernel = resize.ResizeKernel;
 pub const NormalizeOptions = tensor.NormalizeOptions;
+pub const BoxF32 = geometry.BoxF32;
 
 pub const PreprocessMode = enum {
     fit,
     contain,
     letterbox,
+    cover,
 };
 
 pub const PreprocessInfo = struct {
@@ -67,6 +70,28 @@ pub const PreparedTensor = struct {
     }
 };
 
+pub const PreparedImageBatch = struct {
+    allocator: std.mem.Allocator,
+    items: []PreparedImage,
+
+    pub fn deinit(self: *PreparedImageBatch) void {
+        for (self.items) |*item| item.deinit();
+        self.allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
+pub const PreparedTensorBatch = struct {
+    allocator: std.mem.Allocator,
+    items: []PreparedTensor,
+
+    pub fn deinit(self: *PreparedTensorBatch) void {
+        for (self.items) |*item| item.deinit();
+        self.allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
 pub fn prepareImage(
     allocator: std.mem.Allocator,
     src: *const ImageU8,
@@ -81,6 +106,7 @@ pub fn prepareImage(
         .fit => prepareFit(allocator, &converted, src, options),
         .contain => prepareContain(allocator, &converted, src, options),
         .letterbox => prepareLetterbox(allocator, &converted, src, options),
+        .cover => prepareCover(allocator, &converted, src, options),
     };
 }
 
@@ -100,6 +126,84 @@ pub fn prepareTensor(
         .tensor = tensor_out,
         .info = prepared.info,
     };
+}
+
+pub fn prepareImageBatch(
+    allocator: std.mem.Allocator,
+    sources: []const *const ImageU8,
+    options: PreprocessOptions,
+) !PreparedImageBatch {
+    var items = try allocator.alloc(PreparedImage, sources.len);
+    errdefer allocator.free(items);
+
+    var built: usize = 0;
+    errdefer {
+        for (items[0..built]) |*item| item.deinit();
+    }
+
+    for (sources, 0..) |src, i| {
+        items[i] = try prepareImage(allocator, src, options);
+        built += 1;
+    }
+
+    return .{
+        .allocator = allocator,
+        .items = items,
+    };
+}
+
+pub fn prepareTensorBatch(
+    allocator: std.mem.Allocator,
+    sources: []const *const ImageU8,
+    options: PreprocessOptions,
+) !PreparedTensorBatch {
+    var items = try allocator.alloc(PreparedTensor, sources.len);
+    errdefer allocator.free(items);
+
+    var built: usize = 0;
+    errdefer {
+        for (items[0..built]) |*item| item.deinit();
+    }
+
+    for (sources, 0..) |src, i| {
+        items[i] = try prepareTensor(allocator, src, options);
+        built += 1;
+    }
+
+    return .{
+        .allocator = allocator,
+        .items = items,
+    };
+}
+
+pub fn remapBoxToSource(box: *BoxF32, info: PreprocessInfo) void {
+    switch (info.mode) {
+        .fit, .contain => {
+            remapScaledBox(box, info.scale_x, info.scale_y, info.src_width, info.src_height);
+        },
+        .letterbox => {
+            geometry.remapLetterboxedBoxToSource(
+                box,
+                info.offset_x,
+                info.offset_y,
+                info.scale_x,
+                info.scale_y,
+                info.src_width,
+                info.src_height,
+            );
+        },
+        .cover => {
+            geometry.remapCoveredBoxToSource(
+                box,
+                info.offset_x,
+                info.offset_y,
+                info.scale_x,
+                info.scale_y,
+                info.src_width,
+                info.src_height,
+            );
+        },
+    }
 }
 
 fn validateOptions(src: *const ImageU8, options: PreprocessOptions) !void {
@@ -213,6 +317,58 @@ fn prepareLetterbox(
     };
 }
 
+fn prepareCover(
+    allocator: std.mem.Allocator,
+    converted: *const ImageU8,
+    src: *const ImageU8,
+    options: PreprocessOptions,
+) !PreparedImage {
+    var scale = @max(
+        @as(f32, @floatFromInt(options.target_width)) / @as(f32, @floatFromInt(converted.width)),
+        @as(f32, @floatFromInt(options.target_height)) / @as(f32, @floatFromInt(converted.height)),
+    );
+    if (!options.allow_upscale) scale = @min(scale, 1.0);
+
+    const resized_width = @max(@as(usize, 1), @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(converted.width)) * scale))));
+    const resized_height = @max(@as(usize, 1), @as(usize, @intFromFloat(@round(@as(f32, @floatFromInt(converted.height)) * scale))));
+    var resized = try resize.resizeWithKernel(allocator, converted, resized_width, resized_height, options.kernel);
+    defer resized.deinit();
+
+    const crop_left = if (resized_width > options.target_width) (resized_width - options.target_width) / 2 else 0;
+    const crop_top = if (resized_height > options.target_height) (resized_height - options.target_height) / 2 else 0;
+    const crop_width = @min(options.target_width, resized_width);
+    const crop_height = @min(options.target_height, resized_height);
+
+    var image = try ImageU8.init(allocator, crop_width, crop_height, resized.channels);
+    errdefer image.deinit();
+
+    for (0..crop_height) |y| {
+        const src_offset = ((crop_top + y) * resized.width + crop_left) * resized.channels;
+        const dst_offset = y * image.width * image.channels;
+        const row_len = crop_width * image.channels;
+        @memcpy(image.data[dst_offset .. dst_offset + row_len], resized.data[src_offset .. src_offset + row_len]);
+    }
+
+    return .{
+        .image = image,
+        .info = .{
+            .mode = .cover,
+            .src_width = src.width,
+            .src_height = src.height,
+            .request_width = options.target_width,
+            .request_height = options.target_height,
+            .output_width = image.width,
+            .output_height = image.height,
+            .resized_width = resized.width,
+            .resized_height = resized.height,
+            .offset_x = crop_left,
+            .offset_y = crop_top,
+            .scale_x = @as(f32, @floatFromInt(resized.width)) / @as(f32, @floatFromInt(src.width)),
+            .scale_y = @as(f32, @floatFromInt(resized.height)) / @as(f32, @floatFromInt(src.height)),
+        },
+    };
+}
+
 fn fillCanvas(canvas: *ImageU8, format: PixelFormat, pad_value: u8) void {
     switch (format) {
         .gray8, .rgb8 => canvas.fill(pad_value),
@@ -226,4 +382,23 @@ fn fillCanvas(canvas: *ImageU8, format: PixelFormat, pad_value: u8) void {
             }
         },
     }
+}
+
+fn remapScaledBox(
+    box: *BoxF32,
+    scale_x: f32,
+    scale_y: f32,
+    src_width: usize,
+    src_height: usize,
+) void {
+    const width = @as(f32, @floatFromInt(src_width));
+    const height = @as(f32, @floatFromInt(src_height));
+    box.x1 = clipToRange(box.x1 / scale_x, 0.0, width);
+    box.y1 = clipToRange(box.y1 / scale_y, 0.0, height);
+    box.x2 = clipToRange(box.x2 / scale_x, 0.0, width);
+    box.y2 = clipToRange(box.y2 / scale_y, 0.0, height);
+}
+
+fn clipToRange(value: f32, min_value: f32, max_value: f32) f32 {
+    return @max(min_value, @min(max_value, value));
 }
