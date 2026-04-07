@@ -69,6 +69,27 @@ test "writePngFile writes decodable grayscale png" {
     }, decoded.data);
 }
 
+test "encodePngAllocWithOptions writes tEXt chunks" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 1, 1, 3);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 1, 2, 3 });
+
+    const png = try imaging.encodePngAllocWithOptions(testing.allocator, &src, .{
+        .text_entries = &[_]imaging.PngTextEntry{
+            .{ .keyword = "Author", .text = "Pixio" },
+        },
+    });
+    defer testing.allocator.free(png);
+
+    try testing.expect(std.mem.indexOf(u8, png, "tEXt") != null);
+
+    var decoded = try imaging.decodeRgb8(testing.allocator, png);
+    defer decoded.deinit();
+    try testing.expectEqualSlices(u8, src.data, decoded.data);
+}
+
 test "encodeJpegAlloc round-trips rgb image approximately" {
     const testing = std.testing;
 
@@ -140,6 +161,26 @@ test "writeJpegFile writes decodable rgba-derived jpeg" {
 
     try testing.expectEqual(src.width, decoded.width);
     try testing.expectEqual(src.height, decoded.height);
+}
+
+test "encodeJpegAlloc writes exif orientation metadata" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 2, 1, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 0, 255 });
+
+    const jpeg = try imaging.encodeJpegAlloc(testing.allocator, &src, .{
+        .quality = 95,
+        .exif_orientation = 6,
+    });
+    defer testing.allocator.free(jpeg);
+
+    const info = try imaging.probeInfo(jpeg);
+    try testing.expectEqual(imaging.ImageFormat.jpeg, info.format);
+    try testing.expectEqual(@as(u8, 6), info.exif_orientation);
+    try testing.expectEqual(@as(usize, 1), info.width);
+    try testing.expectEqual(@as(usize, 2), info.height);
 }
 
 fn meanAbsDiff(expected: []const u8, actual: []const u8) f32 {

@@ -305,3 +305,44 @@ test "prepareTensorNchwBatch validates batch shape compatibility" {
         .allow_upscale = false,
     }));
 }
+
+test "prepareRoiTensorNchwBatch crops rois and remaps boxes to source" {
+    const testing = std.testing;
+
+    var src = try imaging.ImageU8.init(testing.allocator, 4, 2, 1);
+    defer src.deinit();
+    @memcpy(src.data, &[_]u8{ 0, 10, 20, 30, 40, 50, 60, 70 });
+
+    const inputs = [_]*const imaging.ImageU8{ &src };
+    const rois = [_]imaging.RoiInput{
+        .{
+            .image_index = 0,
+            .rect = .{ .x = 1, .y = 0, .width = 2, .height = 2 },
+        },
+    };
+
+    var batch = try imaging.prepareRoiTensorNchwBatch(testing.allocator, &inputs, &rois, .{
+        .target_width = 2,
+        .target_height = 2,
+        .mode = .fit,
+        .kernel = .nearest,
+        .output_pixel_format = .gray8,
+        .normalize = .{ .scale = 1.0 },
+    });
+    defer batch.deinit();
+
+    try testing.expectEqual(@as(usize, 1), batch.tensor.batch);
+    try testing.expectEqualSlices(f32, &[_]f32{
+        10, 20,
+        50, 60,
+    }, batch.tensor.data);
+
+    var boxes = [_]imaging.BoxF32{
+        .{ .x1 = 0, .y1 = 0, .x2 = 2, .y2 = 2 },
+    };
+    batch.remapBoxes(0, boxes[0..]);
+    try testing.expectEqual(@as(f32, 1.0), boxes[0].x1);
+    try testing.expectEqual(@as(f32, 0.0), boxes[0].y1);
+    try testing.expectEqual(@as(f32, 3.0), boxes[0].x2);
+    try testing.expectEqual(@as(f32, 2.0), boxes[0].y2);
+}

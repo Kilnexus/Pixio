@@ -20,6 +20,8 @@
 - Unified preprocessing pipeline: `prepareImage` / `prepareTensor`
 - Batch preprocessing and source-box remap helpers
 - NCHW batch tensor output and JPEG EXIF orientation auto-apply
+- PNG `tEXt` and JPEG EXIF orientation writeback
+- ROI crop + preprocess + tensor batch pipeline
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
 - Letterbox utilities
@@ -51,6 +53,7 @@
 
 ```bash
 zig build test
+zig build bench
 ```
 
 ## Package Import (build.zig)

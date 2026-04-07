@@ -35,17 +35,24 @@ pub fn resizeNearest(
     target_height: usize,
 ) !ImageU8 {
     try validateResizeInputs(src, target_width, target_height);
+    if (src.width == target_width and src.height == target_height) return cloneImage(allocator, src);
 
     var dst = try ImageU8.init(allocator, target_width, target_height, src.channels);
     errdefer dst.deinit();
+    const x_map = try buildNearestMap(allocator, src.width, target_width);
+    defer allocator.free(x_map);
+    const src_stride = src.width * src.channels;
+    const dst_stride = dst.width * dst.channels;
 
     for (0..target_height) |dy| {
         const src_y = nearestSourceIndex(dy, src.height, target_height);
+        const src_row = src.data[src_y * src_stride ..][0..src_stride];
+        const dst_row = dst.data[dy * dst_stride ..][0..dst_stride];
         for (0..target_width) |dx| {
-            const src_x = nearestSourceIndex(dx, src.width, target_width);
-            const src_offset = (src_y * src.width + src_x) * src.channels;
-            const dst_offset = (dy * target_width + dx) * dst.channels;
-            @memcpy(dst.data[dst_offset .. dst_offset + src.channels], src.data[src_offset .. src_offset + src.channels]);
+            copyPixel(
+                dst_row[dx * dst.channels ..][0..dst.channels],
+                src_row[x_map[dx] * src.channels ..][0..src.channels],
+            );
         }
     }
 
@@ -59,32 +66,39 @@ pub fn resizeBilinear(
     target_height: usize,
 ) !ImageU8 {
     try validateResizeInputs(src, target_width, target_height);
+    if (src.width == target_width and src.height == target_height) return cloneImage(allocator, src);
 
     var dst = try ImageU8.init(allocator, target_width, target_height, src.channels);
     errdefer dst.deinit();
+    const x_samples = try buildLinearAxisSamples(allocator, src.width, target_width);
+    defer allocator.free(x_samples);
+    const y_samples = try buildLinearAxisSamples(allocator, src.height, target_height);
+    defer allocator.free(y_samples);
+    const src_stride = src.width * src.channels;
+    const dst_stride = dst.width * dst.channels;
 
     for (0..target_height) |dy| {
-        const src_y = ((@as(f32, @floatFromInt(dy)) + 0.5) * @as(f32, @floatFromInt(src.height)) / @as(f32, @floatFromInt(target_height))) - 0.5;
-        const y0 = clampIndex(@as(isize, @intFromFloat(@floor(src_y))), src.height);
-        const y1 = if (y0 + 1 < src.height) y0 + 1 else src.height - 1;
-        const wy = src_y - @as(f32, @floatFromInt(y0));
+        const y_sample = y_samples[dy];
+        const row0 = src.data[y_sample.left * src_stride ..][0..src_stride];
+        const row1 = src.data[y_sample.right * src_stride ..][0..src_stride];
+        const dst_row = dst.data[dy * dst_stride ..][0..dst_stride];
 
         for (0..target_width) |dx| {
-            const src_x = ((@as(f32, @floatFromInt(dx)) + 0.5) * @as(f32, @floatFromInt(src.width)) / @as(f32, @floatFromInt(target_width))) - 0.5;
-            const x0 = clampIndex(@as(isize, @intFromFloat(@floor(src_x))), src.width);
-            const x1 = if (x0 + 1 < src.width) x0 + 1 else src.width - 1;
-            const wx = src_x - @as(f32, @floatFromInt(x0));
+            const x_sample = x_samples[dx];
+            const src_offset_00 = x_sample.left * src.channels;
+            const src_offset_10 = x_sample.right * src.channels;
+            const dst_offset = dx * dst.channels;
 
             for (0..src.channels) |channel| {
-                const p00 = @as(f32, @floatFromInt(src.get(x0, y0, channel)));
-                const p10 = @as(f32, @floatFromInt(src.get(x1, y0, channel)));
-                const p01 = @as(f32, @floatFromInt(src.get(x0, y1, channel)));
-                const p11 = @as(f32, @floatFromInt(src.get(x1, y1, channel)));
+                const p00 = @as(f32, @floatFromInt(row0[src_offset_00 + channel]));
+                const p10 = @as(f32, @floatFromInt(row0[src_offset_10 + channel]));
+                const p01 = @as(f32, @floatFromInt(row1[src_offset_00 + channel]));
+                const p11 = @as(f32, @floatFromInt(row1[src_offset_10 + channel]));
 
-                const top = lerp(p00, p10, wx);
-                const bottom = lerp(p01, p11, wx);
-                const value = lerp(top, bottom, wy);
-                dst.set(dx, dy, channel, @intFromFloat(@round(value)));
+                const top = lerp(p00, p10, x_sample.weight);
+                const bottom = lerp(p01, p11, x_sample.weight);
+                const value = lerp(top, bottom, y_sample.weight);
+                dst_row[dst_offset + channel] = @intFromFloat(@round(value));
             }
         }
     }
@@ -99,6 +113,7 @@ pub fn resizeArea(
     target_height: usize,
 ) !ImageU8 {
     try validateResizeInputs(src, target_width, target_height);
+    if (src.width == target_width and src.height == target_height) return cloneImage(allocator, src);
 
     var dst = try ImageU8.init(allocator, target_width, target_height, src.channels);
     errdefer dst.deinit();
@@ -174,43 +189,40 @@ fn resizeWithKernelFn(
     kernel: *const fn (f32) f32,
 ) !ImageU8 {
     try validateResizeInputs(src, target_width, target_height);
+    if (src.width == target_width and src.height == target_height) return cloneImage(allocator, src);
+
+    const x_table = try buildKernelAxisTable(allocator, src.width, target_width, support, kernel);
+    defer freeKernelAxisTable(allocator, x_table);
+    const y_table = try buildKernelAxisTable(allocator, src.height, target_height, support, kernel);
+    defer freeKernelAxisTable(allocator, y_table);
 
     var dst = try ImageU8.init(allocator, target_width, target_height, src.channels);
     errdefer dst.deinit();
-
-    const radius: isize = @intFromFloat(@ceil(support));
+    const dst_stride = dst.width * dst.channels;
 
     for (0..target_height) |dy| {
-        const src_y = sourceCenter(dy, src.height, target_height);
-        const y_center: isize = @intFromFloat(@floor(src_y));
-        const y_start = y_center - radius + 1;
-        const y_end = y_center + radius;
+        const y_offset = dy * y_table.sample_len;
+        const y_indices = y_table.indices[y_offset .. y_offset + y_table.sample_len];
+        const y_weights = y_table.weights[y_offset .. y_offset + y_table.sample_len];
+        const dst_row = dst.data[dy * dst_stride ..][0..dst_stride];
 
         for (0..target_width) |dx| {
-            const src_x = sourceCenter(dx, src.width, target_width);
-            const x_center: isize = @intFromFloat(@floor(src_x));
-            const x_start = x_center - radius + 1;
-            const x_end = x_center + radius;
-            const dst_offset = (dy * target_width + dx) * dst.channels;
+            const x_offset = dx * x_table.sample_len;
+            const x_indices = x_table.indices[x_offset .. x_offset + x_table.sample_len];
+            const x_weights = x_table.weights[x_offset .. x_offset + x_table.sample_len];
+            const dst_offset = dx * dst.channels;
 
             for (0..src.channels) |channel| {
                 var weighted_sum: f32 = 0.0;
                 var weight_sum: f32 = 0.0;
 
-                var sy_i = y_start;
-                while (sy_i <= y_end) : (sy_i += 1) {
-                    const sy = clampIndex(sy_i, src.height);
-                    const wy = kernel(src_y - @as(f32, @floatFromInt(sy)));
+                for (y_indices, y_weights) |sy, wy| {
                     if (wy == 0.0) continue;
-
-                    var sx_i = x_start;
-                    while (sx_i <= x_end) : (sx_i += 1) {
-                        const sx = clampIndex(sx_i, src.width);
-                        const wx = kernel(src_x - @as(f32, @floatFromInt(sx)));
+                    const row = src.data[sy * src.width * src.channels ..][0 .. src.width * src.channels];
+                    for (x_indices, x_weights) |sx, wx| {
                         const weight = wx * wy;
                         if (weight == 0.0) continue;
-
-                        weighted_sum += @as(f32, @floatFromInt(src.get(sx, sy, channel))) * weight;
+                        weighted_sum += @as(f32, @floatFromInt(row[sx * src.channels + channel])) * weight;
                         weight_sum += weight;
                     }
                 }
@@ -218,9 +230,9 @@ fn resizeWithKernelFn(
                 if (weight_sum == 0.0) {
                     const fallback_x = nearestSourceIndex(dx, src.width, target_width);
                     const fallback_y = nearestSourceIndex(dy, src.height, target_height);
-                    dst.data[dst_offset + channel] = src.get(fallback_x, fallback_y, channel);
+                    dst_row[dst_offset + channel] = src.data[(fallback_y * src.width + fallback_x) * src.channels + channel];
                 } else {
-                    dst.data[dst_offset + channel] = clampToU8(weighted_sum / weight_sum);
+                    dst_row[dst_offset + channel] = clampToU8(weighted_sum / weight_sum);
                 }
             }
         }
@@ -234,6 +246,91 @@ fn validateResizeInputs(src: *const ImageU8, target_width: usize, target_height:
         return error.InvalidImageDimensions;
     }
     if (src.channels == 0) return error.InvalidChannelCount;
+}
+
+const LinearAxisSample = struct {
+    left: usize,
+    right: usize,
+    weight: f32,
+};
+
+const KernelAxisTable = struct {
+    sample_len: usize,
+    indices: []usize,
+    weights: []f32,
+};
+
+fn buildNearestMap(
+    allocator: std.mem.Allocator,
+    src_extent: usize,
+    dst_extent: usize,
+) ![]usize {
+    const map = try allocator.alloc(usize, dst_extent);
+    errdefer allocator.free(map);
+    for (map, 0..) |*entry, i| {
+        entry.* = nearestSourceIndex(i, src_extent, dst_extent);
+    }
+    return map;
+}
+
+fn buildLinearAxisSamples(
+    allocator: std.mem.Allocator,
+    src_extent: usize,
+    dst_extent: usize,
+) ![]LinearAxisSample {
+    const samples = try allocator.alloc(LinearAxisSample, dst_extent);
+    errdefer allocator.free(samples);
+    for (samples, 0..) |*sample, i| {
+        const src_coord = sourceCenter(i, src_extent, dst_extent);
+        const left = clampIndex(@as(isize, @intFromFloat(@floor(src_coord))), src_extent);
+        sample.* = .{
+            .left = left,
+            .right = if (left + 1 < src_extent) left + 1 else src_extent - 1,
+            .weight = src_coord - @as(f32, @floatFromInt(left)),
+        };
+    }
+    return samples;
+}
+
+fn buildKernelAxisTable(
+    allocator: std.mem.Allocator,
+    src_extent: usize,
+    dst_extent: usize,
+    support: f32,
+    kernel: *const fn (f32) f32,
+) !KernelAxisTable {
+    const radius: isize = @intFromFloat(@ceil(support));
+    const sample_len: usize = @intCast(radius * 2);
+    const total_len = dst_extent * sample_len;
+    const indices = try allocator.alloc(usize, total_len);
+    errdefer allocator.free(indices);
+    const weights = try allocator.alloc(f32, total_len);
+    errdefer allocator.free(weights);
+
+    for (0..dst_extent) |i| {
+        const src_coord = sourceCenter(i, src_extent, dst_extent);
+        const center: isize = @intFromFloat(@floor(src_coord));
+        const start = center - radius + 1;
+        const base = i * sample_len;
+
+        for (0..sample_len) |offset| {
+            const sample_index = start + @as(isize, @intCast(offset));
+            const clamped = clampIndex(sample_index, src_extent);
+            indices[base + offset] = clamped;
+            weights[base + offset] = kernel(src_coord - @as(f32, @floatFromInt(clamped)));
+        }
+    }
+
+    return .{
+        .sample_len = sample_len,
+        .indices = indices,
+        .weights = weights,
+    };
+}
+
+fn freeKernelAxisTable(allocator: std.mem.Allocator, table: KernelAxisTable) void {
+    allocator.free(table.indices);
+    allocator.free(table.weights);
 }
 
 fn nearestSourceIndex(dst_index: usize, src_extent: usize, dst_extent: usize) usize {
@@ -285,4 +382,29 @@ fn clampIndex(value: isize, upper: usize) usize {
     const upper_index: isize = @intCast(upper - 1);
     if (value > upper_index) return upper - 1;
     return @intCast(value);
+}
+
+fn cloneImage(allocator: std.mem.Allocator, src: *const ImageU8) !ImageU8 {
+    var dst = try ImageU8.init(allocator, src.width, src.height, src.channels);
+    errdefer dst.deinit();
+    @memcpy(dst.data, src.data);
+    return dst;
+}
+
+fn copyPixel(dst: []u8, src: []const u8) void {
+    switch (src.len) {
+        1 => dst[0] = src[0],
+        3 => {
+            dst[0] = src[0];
+            dst[1] = src[1];
+            dst[2] = src[2];
+        },
+        4 => {
+            dst[0] = src[0];
+            dst[1] = src[1];
+            dst[2] = src[2];
+            dst[3] = src[3];
+        },
+        else => @memcpy(dst, src),
+    }
 }

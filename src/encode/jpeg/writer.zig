@@ -12,6 +12,7 @@ pub const ImageConstViewU8 = view_mod.ImageConstViewU8;
 
 pub const JpegEncodeOptions = struct {
     quality: u8 = 90,
+    exif_orientation: ?u8 = null,
 };
 
 pub const JpegEncodeError = types.ImageError || error{
@@ -61,6 +62,7 @@ pub fn writeView(allocator: std.mem.Allocator, writer: *std.Io.Writer, view: Ima
 
     try writeMarker(writer, 0xD8);
     try writeJfifApp0(writer);
+    if (options.exif_orientation) |orientation| try writeExifOrientationApp1(writer, orientation);
     try writeDqt(writer, 0, &quant_tables.luma);
     if (color_image) try writeDqt(writer, 1, &quant_tables.chroma);
     try writeSof0(writer, view.layout.width, view.layout.height, color_image);
@@ -199,6 +201,25 @@ fn writeJfifApp0(writer: *std.Io.Writer) !void {
     try writeU16(writer, 1);
     try writer.writeByte(0);
     try writer.writeByte(0);
+}
+
+fn writeExifOrientationApp1(writer: *std.Io.Writer, orientation: u8) !void {
+    if (orientation < 1 or orientation > 8) return error.InvalidJpegQuality;
+
+    try writeMarker(writer, 0xE1);
+    try writeU16(writer, 34);
+    try writer.writeAll("Exif\x00\x00");
+    try writer.writeAll("II");
+    try writer.writeByte(42);
+    try writer.writeByte(0);
+    try writer.writeAll(&[_]u8{ 8, 0, 0, 0 });
+    try writer.writeAll(&[_]u8{ 1, 0 });
+    try writer.writeAll(&[_]u8{ 0x12, 0x01 });
+    try writer.writeAll(&[_]u8{ 3, 0 });
+    try writer.writeAll(&[_]u8{ 1, 0, 0, 0 });
+    try writer.writeByte(orientation);
+    try writer.writeAll(&[_]u8{ 0, 0, 0 });
+    try writer.writeAll(&[_]u8{ 0, 0, 0, 0 });
 }
 
 fn writeDqt(writer: *std.Io.Writer, table_id: u8, quant_table: *const [64]u8) !void {

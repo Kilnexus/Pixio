@@ -1,5 +1,6 @@
 const std = @import("std");
 const convert = @import("convert.zig");
+const crop = @import("crop.zig");
 const geometry = @import("geometry.zig");
 const fit_mod = @import("fit.zig");
 const resize = @import("resize.zig");
@@ -13,6 +14,7 @@ pub const PixelFormat = pixel.PixelFormat;
 pub const ResizeKernel = resize.ResizeKernel;
 pub const NormalizeOptions = tensor.NormalizeOptions;
 pub const BoxF32 = geometry.BoxF32;
+pub const CropRect = crop.CropRect;
 
 pub const PreprocessMode = enum {
     fit,
@@ -118,6 +120,40 @@ pub const PreparedTensorNCHWBatch = struct {
     }
 };
 
+pub const RoiInput = struct {
+    image_index: usize,
+    rect: CropRect,
+};
+
+pub const RoiPreprocessInfo = struct {
+    image_index: usize,
+    roi: CropRect,
+    preprocess: PreprocessInfo,
+};
+
+pub const PreparedRoiTensorNCHWBatch = struct {
+    allocator: std.mem.Allocator,
+    infos: []RoiPreprocessInfo,
+    tensor: TensorF32NCHW,
+
+    pub fn deinit(self: *PreparedRoiTensorNCHWBatch) void {
+        self.allocator.free(self.infos);
+        self.tensor.deinit();
+        self.* = undefined;
+    }
+
+    pub fn remapBoxes(self: *const PreparedRoiTensorNCHWBatch, index: usize, boxes: []BoxF32) void {
+        const info = self.infos[index];
+        for (boxes) |*box| {
+            remapBoxToSource(box, info.preprocess);
+            box.x1 += @floatFromInt(info.roi.x);
+            box.y1 += @floatFromInt(info.roi.y);
+            box.x2 += @floatFromInt(info.roi.x);
+            box.y2 += @floatFromInt(info.roi.y);
+        }
+    }
+};
+
 pub fn prepareImage(
     allocator: std.mem.Allocator,
     src: *const ImageU8,
@@ -207,29 +243,125 @@ pub fn prepareTensorNchwBatch(
     sources: []const *const ImageU8,
     options: PreprocessOptions,
 ) !PreparedTensorNCHWBatch {
-    var prepared_batch = try prepareImageBatch(allocator, sources, options);
-    defer prepared_batch.deinit();
+    if (sources.len == 0) return error.InvalidBatchSize;
 
-    if (prepared_batch.items.len == 0) return error.InvalidBatchSize;
-
-    const first = &prepared_batch.items[0].image;
-    for (prepared_batch.items[1..]) |item| {
-        if (item.image.width != first.width or item.image.height != first.height or item.image.channels != first.channels) {
-            return error.ShapeMismatch;
-        }
-    }
-
-    const image_ptrs = try allocator.alloc(*const ImageU8, prepared_batch.items.len);
-    defer allocator.free(image_ptrs);
-    const infos = try allocator.alloc(PreprocessInfo, prepared_batch.items.len);
+    const infos = try allocator.alloc(PreprocessInfo, sources.len);
     errdefer allocator.free(infos);
 
-    for (prepared_batch.items, 0..) |*item, i| {
-        image_ptrs[i] = &item.image;
-        infos[i] = item.info;
+    var first = try prepareImage(allocator, sources[0], options);
+    defer first.deinit();
+
+    infos[0] = first.info;
+
+    var tensor_out = try tensor.initTensorBatchNchwF32(
+        allocator,
+        sources.len,
+        first.image.channels,
+        first.image.height,
+        first.image.width,
+    );
+    errdefer tensor_out.deinit();
+
+    tensor.writeTensorNchwSample(
+        tensor_out.data[0..tensor_out.stride_n],
+        &first.image,
+        options.normalize,
+        tensor_out.stride_c,
+        tensor_out.stride_h,
+    );
+
+    for (sources[1..], 1..) |src, i| {
+        var prepared = try prepareImage(allocator, src, options);
+        defer prepared.deinit();
+
+        if (prepared.image.width != tensor_out.width or prepared.image.height != tensor_out.height or prepared.image.channels != tensor_out.channels) {
+            return error.ShapeMismatch;
+        }
+
+        infos[i] = prepared.info;
+        const batch_offset = i * tensor_out.stride_n;
+        tensor.writeTensorNchwSample(
+            tensor_out.data[batch_offset ..][0..tensor_out.stride_n],
+            &prepared.image,
+            options.normalize,
+            tensor_out.stride_c,
+            tensor_out.stride_h,
+        );
+    }
+    return .{
+        .allocator = allocator,
+        .infos = infos,
+        .tensor = tensor_out,
+    };
+}
+
+pub fn prepareRoiTensorNchwBatch(
+    allocator: std.mem.Allocator,
+    sources: []const *const ImageU8,
+    rois: []const RoiInput,
+    options: PreprocessOptions,
+) !PreparedRoiTensorNCHWBatch {
+    if (rois.len == 0) return error.InvalidBatchSize;
+
+    const infos = try allocator.alloc(RoiPreprocessInfo, rois.len);
+    errdefer allocator.free(infos);
+
+    const first_roi = rois[0];
+    if (first_roi.image_index >= sources.len) return error.InvalidCropBounds;
+    var first_crop = try crop.cropRect(allocator, sources[first_roi.image_index], first_roi.rect);
+    defer first_crop.deinit();
+    var first_prepared = try prepareImage(allocator, &first_crop, options);
+    defer first_prepared.deinit();
+
+    infos[0] = .{
+        .image_index = first_roi.image_index,
+        .roi = first_roi.rect,
+        .preprocess = first_prepared.info,
+    };
+
+    var tensor_out = try tensor.initTensorBatchNchwF32(
+        allocator,
+        rois.len,
+        first_prepared.image.channels,
+        first_prepared.image.height,
+        first_prepared.image.width,
+    );
+    errdefer tensor_out.deinit();
+
+    tensor.writeTensorNchwSample(
+        tensor_out.data[0..tensor_out.stride_n],
+        &first_prepared.image,
+        options.normalize,
+        tensor_out.stride_c,
+        tensor_out.stride_h,
+    );
+
+    for (rois[1..], 1..) |roi, i| {
+        if (roi.image_index >= sources.len) return error.InvalidCropBounds;
+        var cropped = try crop.cropRect(allocator, sources[roi.image_index], roi.rect);
+        defer cropped.deinit();
+        var prepared = try prepareImage(allocator, &cropped, options);
+        defer prepared.deinit();
+
+        if (prepared.image.width != tensor_out.width or prepared.image.height != tensor_out.height or prepared.image.channels != tensor_out.channels) {
+            return error.ShapeMismatch;
+        }
+
+        infos[i] = .{
+            .image_index = roi.image_index,
+            .roi = roi.rect,
+            .preprocess = prepared.info,
+        };
+        const batch_offset = i * tensor_out.stride_n;
+        tensor.writeTensorNchwSample(
+            tensor_out.data[batch_offset ..][0..tensor_out.stride_n],
+            &prepared.image,
+            options.normalize,
+            tensor_out.stride_c,
+            tensor_out.stride_h,
+        );
     }
 
-    const tensor_out = try tensor.toTensorBatchNchwF32(allocator, image_ptrs, options.normalize);
     return .{
         .allocator = allocator,
         .infos = infos,
