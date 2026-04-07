@@ -6,6 +6,7 @@ const jpeg = @import("codecs/jpeg.zig");
 const gif = @import("codecs/gif.zig");
 const ico = @import("codecs/ico.zig");
 const webp = @import("codecs/webp.zig");
+const exif = @import("exif.zig");
 const webp_probe = @import("codecs/webp/probe.zig");
 const webp_container = @import("codecs/webp/container.zig");
 
@@ -18,6 +19,7 @@ pub const ImageInfo = struct {
     channels: usize,
     native_channels: usize,
     has_alpha: bool,
+    exif_orientation: u8 = 1,
 };
 
 pub const WebpInfo = webp.WebpInfo;
@@ -337,16 +339,19 @@ fn probeJpeg(bytes: []const u8) !ImageInfo {
 
         if ((marker >= 0xc0 and marker <= 0xc3) or (marker >= 0xc5 and marker <= 0xc7) or (marker >= 0xc9 and marker <= 0xcb) or (marker >= 0xcd and marker <= 0xcf)) {
             if (seg_len < 8) return error.InvalidJpegSegment;
-            const height = readU16be(bytes[pos + 3 .. pos + 5]);
-            const width = readU16be(bytes[pos + 5 .. pos + 7]);
+            const encoded_height = readU16be(bytes[pos + 3 .. pos + 5]);
+            const encoded_width = readU16be(bytes[pos + 5 .. pos + 7]);
             const components = bytes[pos + 7];
+            const orientation = exif.jpegOrientation(bytes);
+            const oriented_dims = exif.orientedDimensions(encoded_width, encoded_height, orientation);
             return .{
                 .format = .jpeg,
-                .width = width,
-                .height = height,
+                .width = oriented_dims[0],
+                .height = oriented_dims[1],
                 .channels = 3,
                 .native_channels = if (components == 1) 1 else 3,
                 .has_alpha = false,
+                .exif_orientation = orientation,
             };
         }
 
@@ -476,16 +481,19 @@ fn probeJpegFile(file: std.fs.File) !ImageInfo {
             var frame_header: [6]u8 = undefined;
             if (try file.preadAll(&frame_header, pos + 2) < frame_header.len) return error.InvalidJpegSegment;
 
-            const height = readU16be(frame_header[1..3]);
-            const width = readU16be(frame_header[3..5]);
+            const encoded_height = readU16be(frame_header[1..3]);
+            const encoded_width = readU16be(frame_header[3..5]);
             const components = frame_header[5];
+            const orientation = try exif.jpegOrientationFile(std.heap.page_allocator, file);
+            const oriented_dims = exif.orientedDimensions(encoded_width, encoded_height, orientation);
             return .{
                 .format = .jpeg,
-                .width = width,
-                .height = height,
+                .width = oriented_dims[0],
+                .height = oriented_dims[1],
                 .channels = 3,
                 .native_channels = if (components == 1) 1 else 3,
                 .has_alpha = false,
+                .exif_orientation = orientation,
             };
         }
 

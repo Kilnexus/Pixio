@@ -19,6 +19,7 @@
 - Median, edge-detect, and emboss filters
 - Unified preprocessing pipeline: `prepareImage` / `prepareTensor`
 - Batch preprocessing and source-box remap helpers
+- NCHW batch tensor output and JPEG EXIF orientation auto-apply
 - Crop and aspect-fill cover resize
 - Pad, flip, and 90-degree rotation helpers
 - Letterbox utilities

@@ -3,6 +3,7 @@ const types = @import("types.zig");
 
 pub const ImageU8 = types.ImageU8;
 pub const TensorF32CHW = types.TensorF32CHW;
+pub const TensorF32NCHW = types.TensorF32NCHW;
 
 pub const NormalizeOptions = struct {
     scale: f32 = 1.0 / 255.0,
@@ -44,6 +45,65 @@ pub fn toTensorChwF32(
     }
 
     return tensor;
+}
+
+pub fn toTensorBatchNchwF32(
+    allocator: std.mem.Allocator,
+    images: []const *const ImageU8,
+    options: NormalizeOptions,
+) !TensorF32NCHW {
+    if (images.len == 0) return error.InvalidBatchSize;
+
+    const first = images[0];
+    if (first.width == 0 or first.height == 0) return error.InvalidImageDimensions;
+    if (first.channels == 0) return error.InvalidChannelCount;
+    try validateStats(first.channels, options.mean);
+    try validateStats(first.channels, options.std);
+
+    for (images[1..]) |image| {
+        if (image.width != first.width or image.height != first.height or image.channels != first.channels) {
+            return error.ShapeMismatch;
+        }
+    }
+
+    const stride_w: usize = 1;
+    const stride_h = first.width;
+    const stride_c = first.height * stride_h;
+    const stride_n = first.channels * stride_c;
+    const total_len = images.len * stride_n;
+
+    var tensor_out = TensorF32NCHW{
+        .allocator = allocator,
+        .batch = images.len,
+        .channels = first.channels,
+        .height = first.height,
+        .width = first.width,
+        .stride_n = stride_n,
+        .stride_c = stride_c,
+        .stride_h = stride_h,
+        .stride_w = stride_w,
+        .data = try allocator.alloc(f32, total_len),
+    };
+    errdefer allocator.free(tensor_out.data);
+
+    for (images, 0..) |image, batch_index| {
+        const batch_offset = batch_index * stride_n;
+        for (0..image.channels) |channel| {
+            const mean = statValue(options.mean, channel);
+            const inv_std = 1.0 / statValueOrOne(options.std, channel);
+            const channel_offset = batch_offset + channel * stride_c;
+            for (0..image.height) |y| {
+                for (0..image.width) |x| {
+                    const src_index = (y * image.width + x) * image.channels + channel;
+                    const dst_index = channel_offset + y * stride_h + x;
+                    const scaled = @as(f32, @floatFromInt(image.data[src_index])) * options.scale;
+                    tensor_out.data[dst_index] = (scaled - mean) * inv_std;
+                }
+            }
+        }
+    }
+
+    return tensor_out;
 }
 
 fn validateStats(channels: usize, values: []const f32) !void {

@@ -79,6 +79,10 @@ pub const PreparedImageBatch = struct {
         self.allocator.free(self.items);
         self.* = undefined;
     }
+
+    pub fn remapBoxes(self: *const PreparedImageBatch, index: usize, boxes: []BoxF32) void {
+        for (boxes) |*box| remapBoxToSource(box, self.items[index].info);
+    }
 };
 
 pub const PreparedTensorBatch = struct {
@@ -89,6 +93,28 @@ pub const PreparedTensorBatch = struct {
         for (self.items) |*item| item.deinit();
         self.allocator.free(self.items);
         self.* = undefined;
+    }
+
+    pub fn remapBoxes(self: *const PreparedTensorBatch, index: usize, boxes: []BoxF32) void {
+        for (boxes) |*box| remapBoxToSource(box, self.items[index].info);
+    }
+};
+
+pub const TensorF32NCHW = types.TensorF32NCHW;
+
+pub const PreparedTensorNCHWBatch = struct {
+    allocator: std.mem.Allocator,
+    infos: []PreprocessInfo,
+    tensor: TensorF32NCHW,
+
+    pub fn deinit(self: *PreparedTensorNCHWBatch) void {
+        self.allocator.free(self.infos);
+        self.tensor.deinit();
+        self.* = undefined;
+    }
+
+    pub fn remapBoxes(self: *const PreparedTensorNCHWBatch, index: usize, boxes: []BoxF32) void {
+        for (boxes) |*box| remapBoxToSource(box, self.infos[index]);
     }
 };
 
@@ -174,6 +200,45 @@ pub fn prepareTensorBatch(
         .allocator = allocator,
         .items = items,
     };
+}
+
+pub fn prepareTensorNchwBatch(
+    allocator: std.mem.Allocator,
+    sources: []const *const ImageU8,
+    options: PreprocessOptions,
+) !PreparedTensorNCHWBatch {
+    var prepared_batch = try prepareImageBatch(allocator, sources, options);
+    defer prepared_batch.deinit();
+
+    if (prepared_batch.items.len == 0) return error.InvalidBatchSize;
+
+    const first = &prepared_batch.items[0].image;
+    for (prepared_batch.items[1..]) |item| {
+        if (item.image.width != first.width or item.image.height != first.height or item.image.channels != first.channels) {
+            return error.ShapeMismatch;
+        }
+    }
+
+    const image_ptrs = try allocator.alloc(*const ImageU8, prepared_batch.items.len);
+    defer allocator.free(image_ptrs);
+    const infos = try allocator.alloc(PreprocessInfo, prepared_batch.items.len);
+    errdefer allocator.free(infos);
+
+    for (prepared_batch.items, 0..) |*item, i| {
+        image_ptrs[i] = &item.image;
+        infos[i] = item.info;
+    }
+
+    const tensor_out = try tensor.toTensorBatchNchwF32(allocator, image_ptrs, options.normalize);
+    return .{
+        .allocator = allocator,
+        .infos = infos,
+        .tensor = tensor_out,
+    };
+}
+
+pub fn remapBoxesToSource(boxes: []BoxF32, info: PreprocessInfo) void {
+    for (boxes) |*box| remapBoxToSource(box, info);
 }
 
 pub fn remapBoxToSource(box: *BoxF32, info: PreprocessInfo) void {

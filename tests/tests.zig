@@ -4,6 +4,7 @@ comptime {
     _ = @import("codec_decode_tests.zig");
     _ = @import("encode_tests.zig");
     _ = @import("preprocess_tests.zig");
+    _ = @import("orientation_tests.zig");
     _ = @import("webp_inspect_tests.zig");
     _ = @import("webp_prefix_tests.zig");
     _ = @import("webp_decode_tests.zig");

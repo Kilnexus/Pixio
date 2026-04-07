@@ -239,3 +239,47 @@ test "prepareImageBatch and prepareTensorBatch process multiple inputs" {
         20.0 / 255.0,
     }, tensor_batch.items[0].tensor.data);
 }
+
+test "prepareTensorNchwBatch packs batch tensor and supports box remap" {
+    const testing = std.testing;
+
+    var a = try imaging.ImageU8.init(testing.allocator, 2, 1, 1);
+    defer a.deinit();
+    @memcpy(a.data, &[_]u8{ 10, 20 });
+
+    var b = try imaging.ImageU8.init(testing.allocator, 2, 1, 1);
+    defer b.deinit();
+    @memcpy(b.data, &[_]u8{ 30, 40 });
+
+    const inputs = [_]*const imaging.ImageU8{ &a, &b };
+    var batch = try imaging.prepareTensorNchwBatch(testing.allocator, &inputs, .{
+        .target_width = 4,
+        .target_height = 2,
+        .mode = .fit,
+        .kernel = .nearest,
+        .output_pixel_format = .gray8,
+        .normalize = .{ .scale = 1.0 },
+    });
+    defer batch.deinit();
+
+    try testing.expectEqual(@as(usize, 2), batch.tensor.batch);
+    try testing.expectEqual(@as(usize, 1), batch.tensor.channels);
+    try testing.expectEqual(@as(usize, 2), batch.tensor.height);
+    try testing.expectEqual(@as(usize, 4), batch.tensor.width);
+    try testing.expectEqual(@as(usize, 8), batch.tensor.stride_n);
+    try testing.expectEqualSlices(f32, &[_]f32{
+        10, 10, 20, 20,
+        10, 10, 20, 20,
+        30, 30, 40, 40,
+        30, 30, 40, 40,
+    }, batch.tensor.data);
+
+    var boxes = [_]imaging.BoxF32{
+        .{ .x1 = 0, .y1 = 0, .x2 = 4, .y2 = 2 },
+    };
+    batch.remapBoxes(0, boxes[0..]);
+    try testing.expectEqual(@as(f32, 0.0), boxes[0].x1);
+    try testing.expectEqual(@as(f32, 0.0), boxes[0].y1);
+    try testing.expectEqual(@as(f32, 2.0), boxes[0].x2);
+    try testing.expectEqual(@as(f32, 1.0), boxes[0].y2);
+}

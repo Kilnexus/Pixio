@@ -3,6 +3,7 @@ const std = @import("std");
 pub const ImageError = error{
     InvalidImageDimensions,
     InvalidChannelCount,
+    InvalidBatchSize,
     InvalidCropBounds,
     InvalidFilterParameter,
     InvalidNormalizationSpec,
@@ -85,6 +86,24 @@ pub const TensorF32CHW = struct {
     data: []f32,
 
     pub fn deinit(self: *TensorF32CHW) void {
+        self.allocator.free(self.data);
+        self.* = undefined;
+    }
+};
+
+pub const TensorF32NCHW = struct {
+    allocator: std.mem.Allocator,
+    batch: usize,
+    channels: usize,
+    height: usize,
+    width: usize,
+    stride_n: usize,
+    stride_c: usize,
+    stride_h: usize,
+    stride_w: usize,
+    data: []f32,
+
+    pub fn deinit(self: *TensorF32NCHW) void {
         self.allocator.free(self.data);
         self.* = undefined;
     }
