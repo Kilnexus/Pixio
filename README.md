@@ -28,7 +28,7 @@
 
 ## Decode Support Matrix
 
-`decodeRgb8` returns RGB8 output. `decodeRgba8` returns RGBA8 output and preserves alpha for PNG, BMP 32-bit, transparent GIF first frames, ICO, and WebP where the source bitstream exposes it. JPEG decode remains opaque.
+`decodeRgb8` returns RGB8 output. `decodeRgba8` returns RGBA8 output and preserves alpha for PNG, BMP 32-bit, transparent GIF first frames, ICO, and WebP where the source bitstream exposes it. JPEG decode remains opaque and now auto-applies EXIF orientation when present.
 
 | Format | Decode support | Notes |
 | --- | --- | --- |

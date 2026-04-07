@@ -283,3 +283,25 @@ test "prepareTensorNchwBatch packs batch tensor and supports box remap" {
     try testing.expectEqual(@as(f32, 2.0), boxes[0].x2);
     try testing.expectEqual(@as(f32, 1.0), boxes[0].y2);
 }
+
+test "prepareTensorNchwBatch validates batch shape compatibility" {
+    const testing = std.testing;
+
+    var a = try imaging.ImageU8.init(testing.allocator, 2, 1, 1);
+    defer a.deinit();
+    @memcpy(a.data, &[_]u8{ 10, 20 });
+
+    var b = try imaging.ImageU8.init(testing.allocator, 3, 1, 1);
+    defer b.deinit();
+    @memcpy(b.data, &[_]u8{ 30, 40, 50 });
+
+    const inputs = [_]*const imaging.ImageU8{ &a, &b };
+    try testing.expectError(error.ShapeMismatch, imaging.prepareTensorNchwBatch(testing.allocator, &inputs, .{
+        .target_width = 4,
+        .target_height = 2,
+        .mode = .contain,
+        .kernel = .nearest,
+        .output_pixel_format = .gray8,
+        .allow_upscale = false,
+    }));
+}
