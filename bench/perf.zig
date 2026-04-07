@@ -8,9 +8,9 @@ const BenchCase = struct {
 };
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
     var image = try buildGradientImage(allocator, 1920, 1080, 3);
     defer image.deinit();

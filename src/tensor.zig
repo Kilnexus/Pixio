@@ -94,6 +94,7 @@ pub fn writeTensorChwSlice(
 
     const plane = src.width * src.height;
     if (dst.len != src.channels * plane) return error.ShapeMismatch;
+    const norm = buildFastNormalizePlan(src.channels, options);
 
     for (0..src.height) |y| {
         const pixel_offset = y * src.width;
@@ -102,8 +103,7 @@ pub fn writeTensorChwSlice(
             const src_offset = x * src.channels;
             for (0..src.channels) |channel| {
                 const dst_index = channel * plane + pixel_offset + x;
-                const scaled = @as(f32, @floatFromInt(row[src_offset + channel])) * options.scale;
-                dst[dst_index] = (scaled - statValue(options.mean, channel)) * reciprocalStat(options.std, channel);
+                dst[dst_index] = @as(f32, @floatFromInt(row[src_offset + channel])) * norm.scale[channel] + norm.bias[channel];
             }
         }
     }
@@ -117,17 +117,35 @@ pub fn writeTensorNchwSample(
     stride_h: usize,
 ) void {
     const row_pixels = src.width * src.channels;
+    const norm = buildFastNormalizePlan(src.channels, options);
     for (0..src.height) |y| {
         const row = src.data[y * row_pixels ..][0..row_pixels];
         const pixel_offset = y * stride_h;
         for (0..src.width) |x| {
             const src_offset = x * src.channels;
             for (0..src.channels) |channel| {
-                const scaled = @as(f32, @floatFromInt(row[src_offset + channel])) * options.scale;
-                dst[channel * stride_c + pixel_offset + x] = (scaled - statValue(options.mean, channel)) * reciprocalStat(options.std, channel);
+                dst[channel * stride_c + pixel_offset + x] = @as(f32, @floatFromInt(row[src_offset + channel])) * norm.scale[channel] + norm.bias[channel];
             }
         }
     }
+}
+
+const FastNormalizePlan = struct {
+    scale: [4]f32,
+    bias: [4]f32,
+};
+
+fn buildFastNormalizePlan(channels: usize, options: NormalizeOptions) FastNormalizePlan {
+    var plan = FastNormalizePlan{
+        .scale = .{ 0.0, 0.0, 0.0, 0.0 },
+        .bias = .{ 0.0, 0.0, 0.0, 0.0 },
+    };
+    for (0..@min(channels, 4)) |channel| {
+        const inv_std = reciprocalStat(options.std, channel);
+        plan.scale[channel] = options.scale * inv_std;
+        plan.bias[channel] = -statValue(options.mean, channel) * inv_std;
+    }
+    return plan;
 }
 
 fn validateTensorInputs(src: *const ImageU8, options: NormalizeOptions) !void {

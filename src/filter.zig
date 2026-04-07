@@ -29,16 +29,16 @@ pub fn gaussianBlur(
     try validateFilterInputs(src);
     if (sigma <= 0.0) return error.InvalidFilterParameter;
 
-    const kernel = try buildGaussianKernel(allocator, sigma);
-    defer allocator.free(kernel);
+    const kernel = try buildGaussianKernelFixed(allocator, sigma);
+    defer allocator.free(kernel.weights);
 
     var horizontal = try ImageU8.init(allocator, src.width, src.height, src.channels);
     defer horizontal.deinit();
     var dst = try ImageU8.init(allocator, src.width, src.height, src.channels);
     errdefer dst.deinit();
 
-    try convolveHorizontal(src, &horizontal, kernel);
-    try convolveVertical(&horizontal, &dst, kernel);
+    convolveHorizontalFixed(src, &horizontal, kernel);
+    convolveVerticalFixed(&horizontal, &dst, kernel);
     return dst;
 }
 
@@ -247,56 +247,92 @@ fn boxBlurVertical(src: *const ImageU8, dst: *ImageU8, radius: usize) !void {
     }
 }
 
-fn convolveHorizontal(src: *const ImageU8, dst: *ImageU8, kernel: []const f32) !void {
-    const radius = kernel.len / 2;
+const FixedKernel = struct {
+    radius: usize,
+    sum: u32,
+    weights: []u16,
+};
+
+fn convolveHorizontalFixed(src: *const ImageU8, dst: *ImageU8, kernel: FixedKernel) void {
+    const row_stride = src.width * src.channels;
 
     for (0..src.height) |y| {
+        const src_row = src.data[y * row_stride ..][0..row_stride];
+        const dst_row = dst.data[y * row_stride ..][0..row_stride];
         for (0..src.width) |x| {
+            const dst_offset = x * src.channels;
             for (0..src.channels) |channel| {
-                var sum: f32 = 0.0;
-                for (kernel, 0..) |weight, index| {
-                    const sx = clampOffset(x + index, radius, src.width);
-                    sum += @as(f32, @floatFromInt(src.get(sx, y, channel))) * weight;
+                var sum: u32 = 0;
+                for (kernel.weights, 0..) |weight, index| {
+                    const sx = clampOffset(x + index, kernel.radius, src.width);
+                    sum += @as(u32, src_row[sx * src.channels + channel]) * weight;
                 }
-                dst.set(x, y, channel, clampToU8(sum));
+                dst_row[dst_offset + channel] = divideRoundToU8(sum, kernel.sum);
             }
         }
     }
 }
 
-fn convolveVertical(src: *const ImageU8, dst: *ImageU8, kernel: []const f32) !void {
-    const radius = kernel.len / 2;
+fn convolveVerticalFixed(src: *const ImageU8, dst: *ImageU8, kernel: FixedKernel) void {
+    const row_stride = src.width * src.channels;
 
     for (0..src.height) |y| {
         for (0..src.width) |x| {
+            const dst_offset = (y * src.width + x) * src.channels;
             for (0..src.channels) |channel| {
-                var sum: f32 = 0.0;
-                for (kernel, 0..) |weight, index| {
-                    const sy = clampOffset(y + index, radius, src.height);
-                    sum += @as(f32, @floatFromInt(src.get(x, sy, channel))) * weight;
+                var sum: u32 = 0;
+                for (kernel.weights, 0..) |weight, index| {
+                    const sy = clampOffset(y + index, kernel.radius, src.height);
+                    const src_row = src.data[sy * row_stride ..][0..row_stride];
+                    sum += @as(u32, src_row[x * src.channels + channel]) * weight;
                 }
-                dst.set(x, y, channel, clampToU8(sum));
+                dst.data[dst_offset + channel] = divideRoundToU8(sum, kernel.sum);
             }
         }
     }
 }
 
-fn buildGaussianKernel(allocator: std.mem.Allocator, sigma: f32) ![]f32 {
+fn buildGaussianKernelFixed(allocator: std.mem.Allocator, sigma: f32) !FixedKernel {
     const radius: usize = @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(sigma * 3.0))));
     const len = radius * 2 + 1;
-    const kernel = try allocator.alloc(f32, len);
-    errdefer allocator.free(kernel);
+    const weights = try allocator.alloc(u16, len);
+    errdefer allocator.free(weights);
+    const fixed_scale: u32 = 1 << 14;
 
-    var sum: f32 = 0.0;
+    var float_sum: f64 = 0.0;
+    var max_index: usize = radius;
+    var max_value: f64 = 0.0;
     for (0..len) |i| {
-        const distance = @as(f32, @floatFromInt(@as(isize, @intCast(i)) - @as(isize, @intCast(radius))));
-        const value = @exp(-(distance * distance) / (2.0 * sigma * sigma));
-        kernel[i] = value;
-        sum += value;
+        const distance = @as(f64, @floatFromInt(@as(isize, @intCast(i)) - @as(isize, @intCast(radius))));
+        const value = std.math.exp(-(distance * distance) / (2.0 * @as(f64, sigma) * @as(f64, sigma)));
+        if (value > max_value) {
+            max_value = value;
+            max_index = i;
+        }
+        weights[i] = @intFromFloat(value * @as(f64, fixed_scale));
+        float_sum += value;
     }
 
-    for (kernel) |*value| value.* /= sum;
-    return kernel;
+    var sum: u32 = 0;
+    for (weights, 0..) |*weight, i| {
+        const distance = @as(f64, @floatFromInt(@as(isize, @intCast(i)) - @as(isize, @intCast(radius))));
+        const value = std.math.exp(-(distance * distance) / (2.0 * @as(f64, sigma) * @as(f64, sigma))) / float_sum;
+        weight.* = @intFromFloat(@round(value * @as(f64, fixed_scale)));
+        sum += weight.*;
+    }
+
+    if (sum != fixed_scale) {
+        const corrected = @as(i32, @intCast(weights[max_index])) + @as(i32, @intCast(fixed_scale - sum));
+        weights[max_index] = @intCast(@max(1, corrected));
+        sum = 0;
+        for (weights) |weight| sum += weight;
+    }
+
+    return .{
+        .radius = radius,
+        .sum = sum,
+        .weights = weights,
+    };
 }
 
 fn clampOffset(index_plus_offset: usize, radius: usize, upper: usize) usize {
@@ -318,4 +354,8 @@ fn clampToU8(value: f32) u8 {
     if (value <= 0.0) return 0;
     if (value >= 255.0) return 255;
     return @intFromFloat(@round(value));
+}
+
+fn divideRoundToU8(sum: u32, divisor: u32) u8 {
+    return @intCast(@min(@as(u32, 255), (sum + divisor / 2) / divisor));
 }
