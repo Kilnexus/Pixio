@@ -131,25 +131,11 @@ pub fn edgeDetect(
         .{ 0, 0, 0 },
         .{ 1, 2, 1 },
     };
-
-    for (0..src.height) |y| {
-        for (0..src.width) |x| {
-            for (0..src.channels) |channel| {
-                var gx: f32 = 0.0;
-                var gy: f32 = 0.0;
-                for (0..3) |ky| {
-                    const sy = clampSignedIndex(@as(isize, @intCast(y)) + @as(isize, @intCast(ky)) - 1, src.height);
-                    for (0..3) |kx| {
-                        const sx = clampSignedIndex(@as(isize, @intCast(x)) + @as(isize, @intCast(kx)) - 1, src.width);
-                        const sample = @as(f32, @floatFromInt(src.get(sx, sy, channel)));
-                        gx += sample * @as(f32, @floatFromInt(gx_kernel[ky][kx]));
-                        gy += sample * @as(f32, @floatFromInt(gy_kernel[ky][kx]));
-                    }
-                }
-                dst.set(x, y, channel, clampToU8(@sqrt(gx * gx + gy * gy)));
-            }
-        }
-    }
+    const edge_ctx = Spatial3x3Context{
+        .src = src,
+        .dst = &dst,
+    };
+    try parallel.forChunks(src.height, src.width * src.height * src.channels, 32, edgeDetectRows, .{&edge_ctx, gx_kernel, gy_kernel});
 
     return dst;
 }
@@ -168,22 +154,11 @@ pub fn emboss(
         .{ -1, 1, 1 },
         .{ 0, 1, 2 },
     };
-
-    for (0..src.height) |y| {
-        for (0..src.width) |x| {
-            for (0..src.channels) |channel| {
-                var sum: f32 = 128.0;
-                for (0..3) |ky| {
-                    const sy = clampSignedIndex(@as(isize, @intCast(y)) + @as(isize, @intCast(ky)) - 1, src.height);
-                    for (0..3) |kx| {
-                        const sx = clampSignedIndex(@as(isize, @intCast(x)) + @as(isize, @intCast(kx)) - 1, src.width);
-                        sum += @as(f32, @floatFromInt(src.get(sx, sy, channel))) * @as(f32, @floatFromInt(kernel[ky][kx]));
-                    }
-                }
-                dst.set(x, y, channel, clampToU8(sum));
-            }
-        }
-    }
+    const emboss_ctx = Spatial3x3Context{
+        .src = src,
+        .dst = &dst,
+    };
+    try parallel.forChunks(src.height, src.width * src.height * src.channels, 32, embossRows, .{&emboss_ctx, kernel});
 
     return dst;
 }
@@ -264,6 +239,11 @@ const FixedConvolutionContext = struct {
     kernel: FixedKernel,
 };
 
+const Spatial3x3Context = struct {
+    src: *const ImageU8,
+    dst: *ImageU8,
+};
+
 fn convolveHorizontalFixedRows(ctx: *const FixedConvolutionContext, row_start: usize, row_end: usize) void {
     convolveHorizontalFixedRange(ctx.src, ctx.dst, ctx.kernel, row_start, row_end);
 }
@@ -302,6 +282,53 @@ fn convolveVerticalFixedRange(src: *const ImageU8, dst: *ImageU8, kernel: FixedK
         },
         else => {
             for (col_start..col_end) |x| convolveVerticalFixedGeneric(src, dst, x, row_stride, kernel);
+        }
+    }
+}
+
+fn edgeDetectRows(ctx: *const Spatial3x3Context, gx_kernel: [3][3]i32, gy_kernel: [3][3]i32, row_start: usize, row_end: usize) void {
+    const row_stride = ctx.src.width * ctx.src.channels;
+    for (row_start..row_end) |y| {
+        const dst_row = ctx.dst.data[y * row_stride ..][0..row_stride];
+        for (0..ctx.src.width) |x| {
+            const dst_offset = x * ctx.src.channels;
+            for (0..ctx.src.channels) |channel| {
+                var gx: f32 = 0.0;
+                var gy: f32 = 0.0;
+                for (0..3) |ky| {
+                    const sy = clampSignedIndex(@as(isize, @intCast(y)) + @as(isize, @intCast(ky)) - 1, ctx.src.height);
+                    const src_row = ctx.src.data[sy * row_stride ..][0..row_stride];
+                    for (0..3) |kx| {
+                        const sx = clampSignedIndex(@as(isize, @intCast(x)) + @as(isize, @intCast(kx)) - 1, ctx.src.width);
+                        const sample = @as(f32, @floatFromInt(src_row[sx * ctx.src.channels + channel]));
+                        gx += sample * @as(f32, @floatFromInt(gx_kernel[ky][kx]));
+                        gy += sample * @as(f32, @floatFromInt(gy_kernel[ky][kx]));
+                    }
+                }
+                dst_row[dst_offset + channel] = clampToU8(@sqrt(gx * gx + gy * gy));
+            }
+        }
+    }
+}
+
+fn embossRows(ctx: *const Spatial3x3Context, kernel: [3][3]i32, row_start: usize, row_end: usize) void {
+    const row_stride = ctx.src.width * ctx.src.channels;
+    for (row_start..row_end) |y| {
+        const dst_row = ctx.dst.data[y * row_stride ..][0..row_stride];
+        for (0..ctx.src.width) |x| {
+            const dst_offset = x * ctx.src.channels;
+            for (0..ctx.src.channels) |channel| {
+                var sum: f32 = 128.0;
+                for (0..3) |ky| {
+                    const sy = clampSignedIndex(@as(isize, @intCast(y)) + @as(isize, @intCast(ky)) - 1, ctx.src.height);
+                    const src_row = ctx.src.data[sy * row_stride ..][0..row_stride];
+                    for (0..3) |kx| {
+                        const sx = clampSignedIndex(@as(isize, @intCast(x)) + @as(isize, @intCast(kx)) - 1, ctx.src.width);
+                        sum += @as(f32, @floatFromInt(src_row[sx * ctx.src.channels + channel])) * @as(f32, @floatFromInt(kernel[ky][kx]));
+                    }
+                }
+                dst_row[dst_offset + channel] = clampToU8(sum);
+            }
         }
     }
 }

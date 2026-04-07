@@ -100,40 +100,14 @@ pub fn resizeArea(
 
     const scale_x = @as(f32, @floatFromInt(src.width)) / @as(f32, @floatFromInt(target_width));
     const scale_y = @as(f32, @floatFromInt(src.height)) / @as(f32, @floatFromInt(target_height));
-
-    for (0..target_height) |dy| {
-        const src_y0 = @as(f32, @floatFromInt(dy)) * scale_y;
-        const src_y1 = @as(f32, @floatFromInt(dy + 1)) * scale_y;
-        const y_start = @max(@as(usize, @intFromFloat(@floor(src_y0))), @as(usize, 0));
-        const y_end = @min(src.height, @as(usize, @intFromFloat(@ceil(src_y1))));
-
-        for (0..target_width) |dx| {
-            const src_x0 = @as(f32, @floatFromInt(dx)) * scale_x;
-            const src_x1 = @as(f32, @floatFromInt(dx + 1)) * scale_x;
-            const x_start = @max(@as(usize, @intFromFloat(@floor(src_x0))), @as(usize, 0));
-            const x_end = @min(src.width, @as(usize, @intFromFloat(@ceil(src_x1))));
-            const dst_offset = (dy * target_width + dx) * dst.channels;
-            const area = (src_x1 - src_x0) * (src_y1 - src_y0);
-
-            for (0..src.channels) |channel| {
-                var sum: f32 = 0.0;
-                for (y_start..y_end) |sy| {
-                    const y_overlap = overlapLength(src_y0, src_y1, @floatFromInt(sy), @floatFromInt(sy + 1));
-                    if (y_overlap <= 0.0) continue;
-
-                    for (x_start..x_end) |sx| {
-                        const x_overlap = overlapLength(src_x0, src_x1, @floatFromInt(sx), @floatFromInt(sx + 1));
-                        if (x_overlap <= 0.0) continue;
-
-                        const weight = x_overlap * y_overlap;
-                        sum += @as(f32, @floatFromInt(src.get(sx, sy, channel))) * weight;
-                    }
-                }
-
-                dst.data[dst_offset + channel] = @intFromFloat(@round(sum / area));
-            }
-        }
-    }
+    const area_ctx = AreaResizeContext{
+        .src = src,
+        .dst = &dst,
+        .target_width = target_width,
+        .scale_x = scale_x,
+        .scale_y = scale_y,
+    };
+    try parallel.forChunks(target_height, target_width * target_height * src.channels, 16, resizeAreaRows, .{&area_ctx});
 
     return dst;
 }
@@ -226,6 +200,14 @@ const KernelResizeContext = struct {
     target_height: usize,
 };
 
+const AreaResizeContext = struct {
+    src: *const ImageU8,
+    dst: *ImageU8,
+    target_width: usize,
+    scale_x: f32,
+    scale_y: f32,
+};
+
 fn resizeBilinearRows(ctx: *const BilinearResizeContext, row_start: usize, row_end: usize) void {
     const src_stride = ctx.src.width * ctx.src.channels;
     const dst_stride = ctx.dst.width * ctx.dst.channels;
@@ -279,6 +261,40 @@ fn resizeKernelRows(ctx: *const KernelResizeContext, row_start: usize, row_end: 
                 y_weights,
                 fallback_x,
                 fallback_y,
+            );
+        }
+    }
+}
+
+fn resizeAreaRows(ctx: *const AreaResizeContext, row_start: usize, row_end: usize) void {
+    const dst_stride = ctx.dst.width * ctx.dst.channels;
+    for (row_start..row_end) |dy| {
+        const src_y0 = @as(f32, @floatFromInt(dy)) * ctx.scale_y;
+        const src_y1 = @as(f32, @floatFromInt(dy + 1)) * ctx.scale_y;
+        const y_start = @max(@as(usize, @intFromFloat(@floor(src_y0))), @as(usize, 0));
+        const y_end = @min(ctx.src.height, @as(usize, @intFromFloat(@ceil(src_y1))));
+        const dst_row = ctx.dst.data[dy * dst_stride ..][0..dst_stride];
+
+        for (0..ctx.target_width) |dx| {
+            const src_x0 = @as(f32, @floatFromInt(dx)) * ctx.scale_x;
+            const src_x1 = @as(f32, @floatFromInt(dx + 1)) * ctx.scale_x;
+            const x_start = @max(@as(usize, @intFromFloat(@floor(src_x0))), @as(usize, 0));
+            const x_end = @min(ctx.src.width, @as(usize, @intFromFloat(@ceil(src_x1))));
+            const dst_offset = dx * ctx.dst.channels;
+            const area = (src_x1 - src_x0) * (src_y1 - src_y0);
+
+            areaPixel(
+                dst_row[dst_offset ..][0..ctx.dst.channels],
+                ctx.src,
+                x_start,
+                x_end,
+                y_start,
+                y_end,
+                src_x0,
+                src_x1,
+                src_y0,
+                src_y1,
+                area,
             );
         }
     }
@@ -582,4 +598,99 @@ fn kernelPixelGeneric(dst: []u8, src: *const ImageU8, x_indices: []const usize, 
     } else {
         for (0..dst.len) |channel| dst[channel] = clampToU8(sums[channel] / weight_sum);
     }
+}
+
+fn areaPixel(
+    dst: []u8,
+    src: *const ImageU8,
+    x_start: usize,
+    x_end: usize,
+    y_start: usize,
+    y_end: usize,
+    src_x0: f32,
+    src_x1: f32,
+    src_y0: f32,
+    src_y1: f32,
+    area: f32,
+) void {
+    switch (dst.len) {
+        1 => areaPixelC1(dst, src, x_start, x_end, y_start, y_end, src_x0, src_x1, src_y0, src_y1, area),
+        3 => areaPixelC3(dst, src, x_start, x_end, y_start, y_end, src_x0, src_x1, src_y0, src_y1, area),
+        4 => areaPixelC4(dst, src, x_start, x_end, y_start, y_end, src_x0, src_x1, src_y0, src_y1, area),
+        else => areaPixelGeneric(dst, src, x_start, x_end, y_start, y_end, src_x0, src_x1, src_y0, src_y1, area),
+    }
+}
+
+fn areaPixelC1(dst: []u8, src: *const ImageU8, x_start: usize, x_end: usize, y_start: usize, y_end: usize, src_x0: f32, src_x1: f32, src_y0: f32, src_y1: f32, area: f32) void {
+    var sum: f32 = 0.0;
+    for (y_start..y_end) |sy| {
+        const y_overlap = overlapLength(src_y0, src_y1, @floatFromInt(sy), @floatFromInt(sy + 1));
+        if (y_overlap <= 0.0) continue;
+        const row = src.data[sy * src.width ..][0..src.width];
+        for (x_start..x_end) |sx| {
+            const x_overlap = overlapLength(src_x0, src_x1, @floatFromInt(sx), @floatFromInt(sx + 1));
+            if (x_overlap <= 0.0) continue;
+            sum += @as(f32, @floatFromInt(row[sx])) * (x_overlap * y_overlap);
+        }
+    }
+    dst[0] = @intFromFloat(@round(sum / area));
+}
+
+fn areaPixelC3(dst: []u8, src: *const ImageU8, x_start: usize, x_end: usize, y_start: usize, y_end: usize, src_x0: f32, src_x1: f32, src_y0: f32, src_y1: f32, area: f32) void {
+    var sums = [3]f32{ 0.0, 0.0, 0.0 };
+    for (y_start..y_end) |sy| {
+        const y_overlap = overlapLength(src_y0, src_y1, @floatFromInt(sy), @floatFromInt(sy + 1));
+        if (y_overlap <= 0.0) continue;
+        const row = src.data[sy * src.width * 3 ..][0 .. src.width * 3];
+        for (x_start..x_end) |sx| {
+            const x_overlap = overlapLength(src_x0, src_x1, @floatFromInt(sx), @floatFromInt(sx + 1));
+            if (x_overlap <= 0.0) continue;
+            const weight = x_overlap * y_overlap;
+            const base = sx * 3;
+            sums[0] += @as(f32, @floatFromInt(row[base])) * weight;
+            sums[1] += @as(f32, @floatFromInt(row[base + 1])) * weight;
+            sums[2] += @as(f32, @floatFromInt(row[base + 2])) * weight;
+        }
+    }
+    dst[0] = @intFromFloat(@round(sums[0] / area));
+    dst[1] = @intFromFloat(@round(sums[1] / area));
+    dst[2] = @intFromFloat(@round(sums[2] / area));
+}
+
+fn areaPixelC4(dst: []u8, src: *const ImageU8, x_start: usize, x_end: usize, y_start: usize, y_end: usize, src_x0: f32, src_x1: f32, src_y0: f32, src_y1: f32, area: f32) void {
+    var sums = [4]f32{ 0.0, 0.0, 0.0, 0.0 };
+    for (y_start..y_end) |sy| {
+        const y_overlap = overlapLength(src_y0, src_y1, @floatFromInt(sy), @floatFromInt(sy + 1));
+        if (y_overlap <= 0.0) continue;
+        const row = src.data[sy * src.width * 4 ..][0 .. src.width * 4];
+        for (x_start..x_end) |sx| {
+            const x_overlap = overlapLength(src_x0, src_x1, @floatFromInt(sx), @floatFromInt(sx + 1));
+            if (x_overlap <= 0.0) continue;
+            const weight = x_overlap * y_overlap;
+            const base = sx * 4;
+            inline for (0..4) |channel| sums[channel] += @as(f32, @floatFromInt(row[base + channel])) * weight;
+        }
+    }
+    inline for (0..4) |channel| dst[channel] = @intFromFloat(@round(sums[channel] / area));
+}
+
+fn areaPixelGeneric(dst: []u8, src: *const ImageU8, x_start: usize, x_end: usize, y_start: usize, y_end: usize, src_x0: f32, src_x1: f32, src_y0: f32, src_y1: f32, area: f32) void {
+    var sums = [_]f32{0.0} ** 8;
+    if (dst.len > sums.len) {
+        for (0..dst.len) |channel| dst[channel] = 0;
+        return;
+    }
+    for (y_start..y_end) |sy| {
+        const y_overlap = overlapLength(src_y0, src_y1, @floatFromInt(sy), @floatFromInt(sy + 1));
+        if (y_overlap <= 0.0) continue;
+        const row = src.data[sy * src.width * src.channels ..][0 .. src.width * src.channels];
+        for (x_start..x_end) |sx| {
+            const x_overlap = overlapLength(src_x0, src_x1, @floatFromInt(sx), @floatFromInt(sx + 1));
+            if (x_overlap <= 0.0) continue;
+            const weight = x_overlap * y_overlap;
+            const base = sx * src.channels;
+            for (0..dst.len) |channel| sums[channel] += @as(f32, @floatFromInt(row[base + channel])) * weight;
+        }
+    }
+    for (0..dst.len) |channel| dst[channel] = @intFromFloat(@round(sums[channel] / area));
 }
