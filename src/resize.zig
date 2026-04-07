@@ -88,18 +88,15 @@ pub fn resizeBilinear(
             const src_offset_00 = x_sample.left * src.channels;
             const src_offset_10 = x_sample.right * src.channels;
             const dst_offset = dx * dst.channels;
-
-            for (0..src.channels) |channel| {
-                const p00 = @as(f32, @floatFromInt(row0[src_offset_00 + channel]));
-                const p10 = @as(f32, @floatFromInt(row0[src_offset_10 + channel]));
-                const p01 = @as(f32, @floatFromInt(row1[src_offset_00 + channel]));
-                const p11 = @as(f32, @floatFromInt(row1[src_offset_10 + channel]));
-
-                const top = lerp(p00, p10, x_sample.weight);
-                const bottom = lerp(p01, p11, x_sample.weight);
-                const value = lerp(top, bottom, y_sample.weight);
-                dst_row[dst_offset + channel] = @intFromFloat(@round(value));
-            }
+            bilinearPixel(
+                dst_row[dst_offset ..][0..dst.channels],
+                row0[src_offset_00 ..][0..src.channels],
+                row0[src_offset_10 ..][0..src.channels],
+                row1[src_offset_00 ..][0..src.channels],
+                row1[src_offset_10 ..][0..src.channels],
+                x_sample.weight,
+                y_sample.weight,
+            );
         }
     }
 
@@ -407,4 +404,40 @@ fn copyPixel(dst: []u8, src: []const u8) void {
         },
         else => @memcpy(dst, src),
     }
+}
+
+fn bilinearPixel(
+    dst: []u8,
+    p00: []const u8,
+    p10: []const u8,
+    p01: []const u8,
+    p11: []const u8,
+    wx: f32,
+    wy: f32,
+) void {
+    switch (dst.len) {
+        1 => dst[0] = bilinearChannel(p00[0], p10[0], p01[0], p11[0], wx, wy),
+        3 => {
+            dst[0] = bilinearChannel(p00[0], p10[0], p01[0], p11[0], wx, wy);
+            dst[1] = bilinearChannel(p00[1], p10[1], p01[1], p11[1], wx, wy);
+            dst[2] = bilinearChannel(p00[2], p10[2], p01[2], p11[2], wx, wy);
+        },
+        4 => {
+            dst[0] = bilinearChannel(p00[0], p10[0], p01[0], p11[0], wx, wy);
+            dst[1] = bilinearChannel(p00[1], p10[1], p01[1], p11[1], wx, wy);
+            dst[2] = bilinearChannel(p00[2], p10[2], p01[2], p11[2], wx, wy);
+            dst[3] = bilinearChannel(p00[3], p10[3], p01[3], p11[3], wx, wy);
+        },
+        else => {
+            for (0..dst.len) |channel| {
+                dst[channel] = bilinearChannel(p00[channel], p10[channel], p01[channel], p11[channel], wx, wy);
+            }
+        },
+    }
+}
+
+fn bilinearChannel(p00: u8, p10: u8, p01: u8, p11: u8, wx: f32, wy: f32) u8 {
+    const top = lerp(@floatFromInt(p00), @floatFromInt(p10), wx);
+    const bottom = lerp(@floatFromInt(p01), @floatFromInt(p11), wx);
+    return @intFromFloat(@round(lerp(top, bottom, wy)));
 }

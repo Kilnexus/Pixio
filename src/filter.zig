@@ -198,25 +198,16 @@ fn cloneImage(allocator: std.mem.Allocator, src: *const ImageU8) !ImageU8 {
 fn boxBlurHorizontal(src: *const ImageU8, dst: *ImageU8, radius: usize) !void {
     const window = radius * 2 + 1;
     const max_window_sum = window * 255;
+    const row_stride = src.width * src.channels;
 
     for (0..src.height) |y| {
-        for (0..src.channels) |channel| {
-            var sum: usize = 0;
-
-            for (0..window) |offset| {
-                const sx = clampOffset(offset, radius, src.width);
-                sum += src.get(sx, y, channel);
-            }
-            dst.set(0, y, channel, @intCast((sum + window / 2) / window));
-
-            for (1..src.width) |x| {
-                const remove_x = clampOffset(x - 1, radius, src.width);
-                const add_x = clampOffset(x + radius, 0, src.width);
-                sum -= src.get(remove_x, y, channel);
-                sum += src.get(add_x, y, channel);
-                std.debug.assert(sum <= max_window_sum);
-                dst.set(x, y, channel, @intCast((sum + window / 2) / window));
-            }
+        const src_row = src.data[y * row_stride ..][0..row_stride];
+        const dst_row = dst.data[y * row_stride ..][0..row_stride];
+        switch (src.channels) {
+            1 => boxBlurHorizontalC1(src_row, dst_row, src.width, radius, window, max_window_sum),
+            3 => boxBlurHorizontalC3(src_row, dst_row, src.width, radius, window, max_window_sum),
+            4 => boxBlurHorizontalC4(src_row, dst_row, src.width, radius, window, max_window_sum),
+            else => boxBlurHorizontalGeneric(src_row, dst_row, src.width, src.channels, radius, window, max_window_sum),
         }
     }
 }
@@ -224,25 +215,20 @@ fn boxBlurHorizontal(src: *const ImageU8, dst: *ImageU8, radius: usize) !void {
 fn boxBlurVertical(src: *const ImageU8, dst: *ImageU8, radius: usize) !void {
     const window = radius * 2 + 1;
     const max_window_sum = window * 255;
+    const row_stride = src.width * src.channels;
 
-    for (0..src.width) |x| {
-        for (0..src.channels) |channel| {
-            var sum: usize = 0;
-
-            for (0..window) |offset| {
-                const sy = clampOffset(offset, radius, src.height);
-                sum += src.get(x, sy, channel);
-            }
-            dst.set(x, 0, channel, @intCast((sum + window / 2) / window));
-
-            for (1..src.height) |y| {
-                const remove_y = clampOffset(y - 1, radius, src.height);
-                const add_y = clampOffset(y + radius, 0, src.height);
-                sum -= src.get(x, remove_y, channel);
-                sum += src.get(x, add_y, channel);
-                std.debug.assert(sum <= max_window_sum);
-                dst.set(x, y, channel, @intCast((sum + window / 2) / window));
-            }
+    switch (src.channels) {
+        1 => {
+            for (0..src.width) |x| boxBlurVerticalC1(src, dst, x, radius, window, max_window_sum, row_stride);
+        },
+        3 => {
+            for (0..src.width) |x| boxBlurVerticalC3(src, dst, x, radius, window, max_window_sum, row_stride);
+        },
+        4 => {
+            for (0..src.width) |x| boxBlurVerticalC4(src, dst, x, radius, window, max_window_sum, row_stride);
+        },
+        else => {
+            for (0..src.width) |x| boxBlurVerticalGeneric(src, dst, x, radius, window, max_window_sum, row_stride);
         }
     }
 }
@@ -259,16 +245,11 @@ fn convolveHorizontalFixed(src: *const ImageU8, dst: *ImageU8, kernel: FixedKern
     for (0..src.height) |y| {
         const src_row = src.data[y * row_stride ..][0..row_stride];
         const dst_row = dst.data[y * row_stride ..][0..row_stride];
-        for (0..src.width) |x| {
-            const dst_offset = x * src.channels;
-            for (0..src.channels) |channel| {
-                var sum: u32 = 0;
-                for (kernel.weights, 0..) |weight, index| {
-                    const sx = clampOffset(x + index, kernel.radius, src.width);
-                    sum += @as(u32, src_row[sx * src.channels + channel]) * weight;
-                }
-                dst_row[dst_offset + channel] = divideRoundToU8(sum, kernel.sum);
-            }
+        switch (src.channels) {
+            1 => convolveHorizontalFixedC1(src_row, dst_row, src.width, kernel),
+            3 => convolveHorizontalFixedC3(src_row, dst_row, src.width, kernel),
+            4 => convolveHorizontalFixedC4(src_row, dst_row, src.width, kernel),
+            else => convolveHorizontalFixedGeneric(src_row, dst_row, src.width, src.channels, kernel),
         }
     }
 }
@@ -276,18 +257,274 @@ fn convolveHorizontalFixed(src: *const ImageU8, dst: *ImageU8, kernel: FixedKern
 fn convolveVerticalFixed(src: *const ImageU8, dst: *ImageU8, kernel: FixedKernel) void {
     const row_stride = src.width * src.channels;
 
-    for (0..src.height) |y| {
-        for (0..src.width) |x| {
-            const dst_offset = (y * src.width + x) * src.channels;
-            for (0..src.channels) |channel| {
-                var sum: u32 = 0;
-                for (kernel.weights, 0..) |weight, index| {
-                    const sy = clampOffset(y + index, kernel.radius, src.height);
-                    const src_row = src.data[sy * row_stride ..][0..row_stride];
-                    sum += @as(u32, src_row[x * src.channels + channel]) * weight;
-                }
-                dst.data[dst_offset + channel] = divideRoundToU8(sum, kernel.sum);
+    switch (src.channels) {
+        1 => {
+            for (0..src.width) |x| convolveVerticalFixedC1(src, dst, x, row_stride, kernel);
+        },
+        3 => {
+            for (0..src.width) |x| convolveVerticalFixedC3(src, dst, x, row_stride, kernel);
+        },
+        4 => {
+            for (0..src.width) |x| convolveVerticalFixedC4(src, dst, x, row_stride, kernel);
+        },
+        else => {
+            for (0..src.width) |x| convolveVerticalFixedGeneric(src, dst, x, row_stride, kernel);
+        }
+    }
+}
+
+fn boxBlurHorizontalC1(src_row: []const u8, dst_row: []u8, width: usize, radius: usize, window: usize, max_window_sum: usize) void {
+    var sum: usize = 0;
+    for (0..window) |offset| sum += src_row[clampOffset(offset, radius, width)];
+    dst_row[0] = @intCast((sum + window / 2) / window);
+    for (1..width) |x| {
+        sum -= src_row[clampOffset(x - 1, radius, width)];
+        sum += src_row[clampOffset(x + radius, 0, width)];
+        std.debug.assert(sum <= max_window_sum);
+        dst_row[x] = @intCast((sum + window / 2) / window);
+    }
+}
+
+fn boxBlurHorizontalC3(src_row: []const u8, dst_row: []u8, width: usize, radius: usize, window: usize, max_window_sum: usize) void {
+    var s0: usize = 0;
+    var s1: usize = 0;
+    var s2: usize = 0;
+    for (0..window) |offset| {
+        const base = clampOffset(offset, radius, width) * 3;
+        s0 += src_row[base];
+        s1 += src_row[base + 1];
+        s2 += src_row[base + 2];
+    }
+    dst_row[0] = @intCast((s0 + window / 2) / window);
+    dst_row[1] = @intCast((s1 + window / 2) / window);
+    dst_row[2] = @intCast((s2 + window / 2) / window);
+    for (1..width) |x| {
+        const remove = clampOffset(x - 1, radius, width) * 3;
+        const add = clampOffset(x + radius, 0, width) * 3;
+        s0 = s0 - src_row[remove] + src_row[add];
+        s1 = s1 - src_row[remove + 1] + src_row[add + 1];
+        s2 = s2 - src_row[remove + 2] + src_row[add + 2];
+        std.debug.assert(s0 <= max_window_sum and s1 <= max_window_sum and s2 <= max_window_sum);
+        const base = x * 3;
+        dst_row[base] = @intCast((s0 + window / 2) / window);
+        dst_row[base + 1] = @intCast((s1 + window / 2) / window);
+        dst_row[base + 2] = @intCast((s2 + window / 2) / window);
+    }
+}
+
+fn boxBlurHorizontalC4(src_row: []const u8, dst_row: []u8, width: usize, radius: usize, window: usize, max_window_sum: usize) void {
+    var sums = [4]usize{ 0, 0, 0, 0 };
+    for (0..window) |offset| {
+        const base = clampOffset(offset, radius, width) * 4;
+        inline for (0..4) |channel| sums[channel] += src_row[base + channel];
+    }
+    inline for (0..4) |channel| dst_row[channel] = @intCast((sums[channel] + window / 2) / window);
+    for (1..width) |x| {
+        const remove = clampOffset(x - 1, radius, width) * 4;
+        const add = clampOffset(x + radius, 0, width) * 4;
+        inline for (0..4) |channel| {
+            sums[channel] = sums[channel] - src_row[remove + channel] + src_row[add + channel];
+            std.debug.assert(sums[channel] <= max_window_sum);
+        }
+        const base = x * 4;
+        inline for (0..4) |channel| dst_row[base + channel] = @intCast((sums[channel] + window / 2) / window);
+    }
+}
+
+fn boxBlurHorizontalGeneric(src_row: []const u8, dst_row: []u8, width: usize, channels: usize, radius: usize, window: usize, max_window_sum: usize) void {
+    for (0..channels) |channel| {
+        var sum: usize = 0;
+        for (0..window) |offset| sum += src_row[clampOffset(offset, radius, width) * channels + channel];
+        dst_row[channel] = @intCast((sum + window / 2) / window);
+        for (1..width) |x| {
+            sum -= src_row[clampOffset(x - 1, radius, width) * channels + channel];
+            sum += src_row[clampOffset(x + radius, 0, width) * channels + channel];
+            std.debug.assert(sum <= max_window_sum);
+            dst_row[x * channels + channel] = @intCast((sum + window / 2) / window);
+        }
+    }
+}
+
+fn boxBlurVerticalC1(src: *const ImageU8, dst: *ImageU8, x: usize, radius: usize, window: usize, max_window_sum: usize, row_stride: usize) void {
+    var sum: usize = 0;
+    for (0..window) |offset| sum += src.data[clampOffset(offset, radius, src.height) * row_stride + x];
+    dst.data[x] = @intCast((sum + window / 2) / window);
+    for (1..src.height) |y| {
+        sum -= src.data[clampOffset(y - 1, radius, src.height) * row_stride + x];
+        sum += src.data[clampOffset(y + radius, 0, src.height) * row_stride + x];
+        std.debug.assert(sum <= max_window_sum);
+        dst.data[y * row_stride + x] = @intCast((sum + window / 2) / window);
+    }
+}
+
+fn boxBlurVerticalC3(src: *const ImageU8, dst: *ImageU8, x: usize, radius: usize, window: usize, max_window_sum: usize, row_stride: usize) void {
+    const base_x = x * 3;
+    var s0: usize = 0;
+    var s1: usize = 0;
+    var s2: usize = 0;
+    for (0..window) |offset| {
+        const base = clampOffset(offset, radius, src.height) * row_stride + base_x;
+        s0 += src.data[base];
+        s1 += src.data[base + 1];
+        s2 += src.data[base + 2];
+    }
+    dst.data[base_x] = @intCast((s0 + window / 2) / window);
+    dst.data[base_x + 1] = @intCast((s1 + window / 2) / window);
+    dst.data[base_x + 2] = @intCast((s2 + window / 2) / window);
+    for (1..src.height) |y| {
+        const remove = clampOffset(y - 1, radius, src.height) * row_stride + base_x;
+        const add = clampOffset(y + radius, 0, src.height) * row_stride + base_x;
+        s0 = s0 - src.data[remove] + src.data[add];
+        s1 = s1 - src.data[remove + 1] + src.data[add + 1];
+        s2 = s2 - src.data[remove + 2] + src.data[add + 2];
+        std.debug.assert(s0 <= max_window_sum and s1 <= max_window_sum and s2 <= max_window_sum);
+        const base = y * row_stride + base_x;
+        dst.data[base] = @intCast((s0 + window / 2) / window);
+        dst.data[base + 1] = @intCast((s1 + window / 2) / window);
+        dst.data[base + 2] = @intCast((s2 + window / 2) / window);
+    }
+}
+
+fn boxBlurVerticalC4(src: *const ImageU8, dst: *ImageU8, x: usize, radius: usize, window: usize, max_window_sum: usize, row_stride: usize) void {
+    const base_x = x * 4;
+    var sums = [4]usize{ 0, 0, 0, 0 };
+    for (0..window) |offset| {
+        const base = clampOffset(offset, radius, src.height) * row_stride + base_x;
+        inline for (0..4) |channel| sums[channel] += src.data[base + channel];
+    }
+    inline for (0..4) |channel| dst.data[base_x + channel] = @intCast((sums[channel] + window / 2) / window);
+    for (1..src.height) |y| {
+        const remove = clampOffset(y - 1, radius, src.height) * row_stride + base_x;
+        const add = clampOffset(y + radius, 0, src.height) * row_stride + base_x;
+        inline for (0..4) |channel| {
+            sums[channel] = sums[channel] - src.data[remove + channel] + src.data[add + channel];
+            std.debug.assert(sums[channel] <= max_window_sum);
+        }
+        const base = y * row_stride + base_x;
+        inline for (0..4) |channel| dst.data[base + channel] = @intCast((sums[channel] + window / 2) / window);
+    }
+}
+
+fn boxBlurVerticalGeneric(src: *const ImageU8, dst: *ImageU8, x: usize, radius: usize, window: usize, max_window_sum: usize, row_stride: usize) void {
+    for (0..src.channels) |channel| {
+        const base_x = x * src.channels + channel;
+        var sum: usize = 0;
+        for (0..window) |offset| sum += src.data[clampOffset(offset, radius, src.height) * row_stride + base_x];
+        dst.data[base_x] = @intCast((sum + window / 2) / window);
+        for (1..src.height) |y| {
+            sum -= src.data[clampOffset(y - 1, radius, src.height) * row_stride + base_x];
+            sum += src.data[clampOffset(y + radius, 0, src.height) * row_stride + base_x];
+            std.debug.assert(sum <= max_window_sum);
+            dst.data[y * row_stride + base_x] = @intCast((sum + window / 2) / window);
+        }
+    }
+}
+
+fn convolveHorizontalFixedC1(src_row: []const u8, dst_row: []u8, width: usize, kernel: FixedKernel) void {
+    for (0..width) |x| {
+        var sum: u32 = 0;
+        for (kernel.weights, 0..) |weight, index| sum += @as(u32, src_row[clampOffset(x + index, kernel.radius, width)]) * weight;
+        dst_row[x] = divideRoundToU8(sum, kernel.sum);
+    }
+}
+
+fn convolveHorizontalFixedC3(src_row: []const u8, dst_row: []u8, width: usize, kernel: FixedKernel) void {
+    for (0..width) |x| {
+        const base = x * 3;
+        var s0: u32 = 0;
+        var s1: u32 = 0;
+        var s2: u32 = 0;
+        for (kernel.weights, 0..) |weight, index| {
+            const sample = clampOffset(x + index, kernel.radius, width) * 3;
+            s0 += @as(u32, src_row[sample]) * weight;
+            s1 += @as(u32, src_row[sample + 1]) * weight;
+            s2 += @as(u32, src_row[sample + 2]) * weight;
+        }
+        dst_row[base] = divideRoundToU8(s0, kernel.sum);
+        dst_row[base + 1] = divideRoundToU8(s1, kernel.sum);
+        dst_row[base + 2] = divideRoundToU8(s2, kernel.sum);
+    }
+}
+
+fn convolveHorizontalFixedC4(src_row: []const u8, dst_row: []u8, width: usize, kernel: FixedKernel) void {
+    for (0..width) |x| {
+        const base = x * 4;
+        var sums = [4]u32{ 0, 0, 0, 0 };
+        for (kernel.weights, 0..) |weight, index| {
+            const sample = clampOffset(x + index, kernel.radius, width) * 4;
+            inline for (0..4) |channel| sums[channel] += @as(u32, src_row[sample + channel]) * weight;
+        }
+        inline for (0..4) |channel| dst_row[base + channel] = divideRoundToU8(sums[channel], kernel.sum);
+    }
+}
+
+fn convolveHorizontalFixedGeneric(src_row: []const u8, dst_row: []u8, width: usize, channels: usize, kernel: FixedKernel) void {
+    for (0..width) |x| {
+        const base = x * channels;
+        for (0..channels) |channel| {
+            var sum: u32 = 0;
+            for (kernel.weights, 0..) |weight, index| {
+                const sample = clampOffset(x + index, kernel.radius, width) * channels + channel;
+                sum += @as(u32, src_row[sample]) * weight;
             }
+            dst_row[base + channel] = divideRoundToU8(sum, kernel.sum);
+        }
+    }
+}
+
+fn convolveVerticalFixedC1(src: *const ImageU8, dst: *ImageU8, x: usize, row_stride: usize, kernel: FixedKernel) void {
+    for (0..src.height) |y| {
+        var sum: u32 = 0;
+        for (kernel.weights, 0..) |weight, index| {
+            const sy = clampOffset(y + index, kernel.radius, src.height);
+            sum += @as(u32, src.data[sy * row_stride + x]) * weight;
+        }
+        dst.data[y * row_stride + x] = divideRoundToU8(sum, kernel.sum);
+    }
+}
+
+fn convolveVerticalFixedC3(src: *const ImageU8, dst: *ImageU8, x: usize, row_stride: usize, kernel: FixedKernel) void {
+    const base_x = x * 3;
+    for (0..src.height) |y| {
+        var s0: u32 = 0;
+        var s1: u32 = 0;
+        var s2: u32 = 0;
+        for (kernel.weights, 0..) |weight, index| {
+            const base = clampOffset(y + index, kernel.radius, src.height) * row_stride + base_x;
+            s0 += @as(u32, src.data[base]) * weight;
+            s1 += @as(u32, src.data[base + 1]) * weight;
+            s2 += @as(u32, src.data[base + 2]) * weight;
+        }
+        const dst_base = y * row_stride + base_x;
+        dst.data[dst_base] = divideRoundToU8(s0, kernel.sum);
+        dst.data[dst_base + 1] = divideRoundToU8(s1, kernel.sum);
+        dst.data[dst_base + 2] = divideRoundToU8(s2, kernel.sum);
+    }
+}
+
+fn convolveVerticalFixedC4(src: *const ImageU8, dst: *ImageU8, x: usize, row_stride: usize, kernel: FixedKernel) void {
+    const base_x = x * 4;
+    for (0..src.height) |y| {
+        var sums = [4]u32{ 0, 0, 0, 0 };
+        for (kernel.weights, 0..) |weight, index| {
+            const base = clampOffset(y + index, kernel.radius, src.height) * row_stride + base_x;
+            inline for (0..4) |channel| sums[channel] += @as(u32, src.data[base + channel]) * weight;
+        }
+        const dst_base = y * row_stride + base_x;
+        inline for (0..4) |channel| dst.data[dst_base + channel] = divideRoundToU8(sums[channel], kernel.sum);
+    }
+}
+
+fn convolveVerticalFixedGeneric(src: *const ImageU8, dst: *ImageU8, x: usize, row_stride: usize, kernel: FixedKernel) void {
+    for (0..src.height) |y| {
+        const dst_base = y * row_stride + x * src.channels;
+        for (0..src.channels) |channel| {
+            var sum: u32 = 0;
+            for (kernel.weights, 0..) |weight, index| {
+                const base = clampOffset(y + index, kernel.radius, src.height) * row_stride + x * src.channels + channel;
+                sum += @as(u32, src.data[base]) * weight;
+            }
+            dst.data[dst_base + channel] = divideRoundToU8(sum, kernel.sum);
         }
     }
 }
