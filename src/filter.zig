@@ -1,4 +1,5 @@
 const std = @import("std");
+const parallel = @import("parallel.zig");
 const types = @import("types.zig");
 
 pub const ImageU8 = types.ImageU8;
@@ -16,8 +17,10 @@ pub fn boxBlur(
     var dst = try ImageU8.init(allocator, src.width, src.height, src.channels);
     errdefer dst.deinit();
 
-    try boxBlurHorizontal(src, &horizontal, radius);
-    try boxBlurVertical(&horizontal, &dst, radius);
+    const box_h_ctx = BoxBlurContext{ .src = src, .dst = &horizontal, .radius = radius };
+    try parallel.forChunks(src.height, src.width * src.height * src.channels, 32, boxBlurHorizontalRows, .{&box_h_ctx});
+    const box_v_ctx = BoxBlurContext{ .src = &horizontal, .dst = &dst, .radius = radius };
+    try parallel.forChunks(src.width, src.width * src.height * src.channels, 32, boxBlurVerticalColumns, .{&box_v_ctx});
     return dst;
 }
 
@@ -37,8 +40,10 @@ pub fn gaussianBlur(
     var dst = try ImageU8.init(allocator, src.width, src.height, src.channels);
     errdefer dst.deinit();
 
-    convolveHorizontalFixed(src, &horizontal, kernel);
-    convolveVerticalFixed(&horizontal, &dst, kernel);
+    const conv_h_ctx = FixedConvolutionContext{ .src = src, .dst = &horizontal, .kernel = kernel };
+    try parallel.forChunks(src.height, src.width * src.height * src.channels, 32, convolveHorizontalFixedRows, .{&conv_h_ctx});
+    const conv_v_ctx = FixedConvolutionContext{ .src = &horizontal, .dst = &dst, .kernel = kernel };
+    try parallel.forChunks(src.width, src.width * src.height * src.channels, 32, convolveVerticalFixedColumns, .{&conv_v_ctx});
     return dst;
 }
 
@@ -195,12 +200,16 @@ fn cloneImage(allocator: std.mem.Allocator, src: *const ImageU8) !ImageU8 {
     return dst;
 }
 
-fn boxBlurHorizontal(src: *const ImageU8, dst: *ImageU8, radius: usize) !void {
+fn boxBlurHorizontalRows(ctx: *const BoxBlurContext, row_start: usize, row_end: usize) void {
+    boxBlurHorizontalRange(ctx.src, ctx.dst, ctx.radius, row_start, row_end);
+}
+
+fn boxBlurHorizontalRange(src: *const ImageU8, dst: *ImageU8, radius: usize, row_start: usize, row_end: usize) void {
     const window = radius * 2 + 1;
     const max_window_sum = window * 255;
     const row_stride = src.width * src.channels;
 
-    for (0..src.height) |y| {
+    for (row_start..row_end) |y| {
         const src_row = src.data[y * row_stride ..][0..row_stride];
         const dst_row = dst.data[y * row_stride ..][0..row_stride];
         switch (src.channels) {
@@ -212,23 +221,27 @@ fn boxBlurHorizontal(src: *const ImageU8, dst: *ImageU8, radius: usize) !void {
     }
 }
 
-fn boxBlurVertical(src: *const ImageU8, dst: *ImageU8, radius: usize) !void {
+fn boxBlurVerticalColumns(ctx: *const BoxBlurContext, col_start: usize, col_end: usize) void {
+    boxBlurVerticalRange(ctx.src, ctx.dst, ctx.radius, col_start, col_end);
+}
+
+fn boxBlurVerticalRange(src: *const ImageU8, dst: *ImageU8, radius: usize, col_start: usize, col_end: usize) void {
     const window = radius * 2 + 1;
     const max_window_sum = window * 255;
     const row_stride = src.width * src.channels;
 
     switch (src.channels) {
         1 => {
-            for (0..src.width) |x| boxBlurVerticalC1(src, dst, x, radius, window, max_window_sum, row_stride);
+            for (col_start..col_end) |x| boxBlurVerticalC1(src, dst, x, radius, window, max_window_sum, row_stride);
         },
         3 => {
-            for (0..src.width) |x| boxBlurVerticalC3(src, dst, x, radius, window, max_window_sum, row_stride);
+            for (col_start..col_end) |x| boxBlurVerticalC3(src, dst, x, radius, window, max_window_sum, row_stride);
         },
         4 => {
-            for (0..src.width) |x| boxBlurVerticalC4(src, dst, x, radius, window, max_window_sum, row_stride);
+            for (col_start..col_end) |x| boxBlurVerticalC4(src, dst, x, radius, window, max_window_sum, row_stride);
         },
         else => {
-            for (0..src.width) |x| boxBlurVerticalGeneric(src, dst, x, radius, window, max_window_sum, row_stride);
+            for (col_start..col_end) |x| boxBlurVerticalGeneric(src, dst, x, radius, window, max_window_sum, row_stride);
         }
     }
 }
@@ -239,10 +252,26 @@ const FixedKernel = struct {
     weights: []u16,
 };
 
-fn convolveHorizontalFixed(src: *const ImageU8, dst: *ImageU8, kernel: FixedKernel) void {
+const BoxBlurContext = struct {
+    src: *const ImageU8,
+    dst: *ImageU8,
+    radius: usize,
+};
+
+const FixedConvolutionContext = struct {
+    src: *const ImageU8,
+    dst: *ImageU8,
+    kernel: FixedKernel,
+};
+
+fn convolveHorizontalFixedRows(ctx: *const FixedConvolutionContext, row_start: usize, row_end: usize) void {
+    convolveHorizontalFixedRange(ctx.src, ctx.dst, ctx.kernel, row_start, row_end);
+}
+
+fn convolveHorizontalFixedRange(src: *const ImageU8, dst: *ImageU8, kernel: FixedKernel, row_start: usize, row_end: usize) void {
     const row_stride = src.width * src.channels;
 
-    for (0..src.height) |y| {
+    for (row_start..row_end) |y| {
         const src_row = src.data[y * row_stride ..][0..row_stride];
         const dst_row = dst.data[y * row_stride ..][0..row_stride];
         switch (src.channels) {
@@ -254,21 +283,25 @@ fn convolveHorizontalFixed(src: *const ImageU8, dst: *ImageU8, kernel: FixedKern
     }
 }
 
-fn convolveVerticalFixed(src: *const ImageU8, dst: *ImageU8, kernel: FixedKernel) void {
+fn convolveVerticalFixedColumns(ctx: *const FixedConvolutionContext, col_start: usize, col_end: usize) void {
+    convolveVerticalFixedRange(ctx.src, ctx.dst, ctx.kernel, col_start, col_end);
+}
+
+fn convolveVerticalFixedRange(src: *const ImageU8, dst: *ImageU8, kernel: FixedKernel, col_start: usize, col_end: usize) void {
     const row_stride = src.width * src.channels;
 
     switch (src.channels) {
         1 => {
-            for (0..src.width) |x| convolveVerticalFixedC1(src, dst, x, row_stride, kernel);
+            for (col_start..col_end) |x| convolveVerticalFixedC1(src, dst, x, row_stride, kernel);
         },
         3 => {
-            for (0..src.width) |x| convolveVerticalFixedC3(src, dst, x, row_stride, kernel);
+            for (col_start..col_end) |x| convolveVerticalFixedC3(src, dst, x, row_stride, kernel);
         },
         4 => {
-            for (0..src.width) |x| convolveVerticalFixedC4(src, dst, x, row_stride, kernel);
+            for (col_start..col_end) |x| convolveVerticalFixedC4(src, dst, x, row_stride, kernel);
         },
         else => {
-            for (0..src.width) |x| convolveVerticalFixedGeneric(src, dst, x, row_stride, kernel);
+            for (col_start..col_end) |x| convolveVerticalFixedGeneric(src, dst, x, row_stride, kernel);
         }
     }
 }

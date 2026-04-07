@@ -1,4 +1,5 @@
 const std = @import("std");
+const parallel = @import("parallel.zig");
 const types = @import("types.zig");
 
 pub const ImageU8 = types.ImageU8;
@@ -74,31 +75,13 @@ pub fn resizeBilinear(
     defer allocator.free(x_samples);
     const y_samples = try buildLinearAxisSamples(allocator, src.height, target_height);
     defer allocator.free(y_samples);
-    const src_stride = src.width * src.channels;
-    const dst_stride = dst.width * dst.channels;
-
-    for (0..target_height) |dy| {
-        const y_sample = y_samples[dy];
-        const row0 = src.data[y_sample.left * src_stride ..][0..src_stride];
-        const row1 = src.data[y_sample.right * src_stride ..][0..src_stride];
-        const dst_row = dst.data[dy * dst_stride ..][0..dst_stride];
-
-        for (0..target_width) |dx| {
-            const x_sample = x_samples[dx];
-            const src_offset_00 = x_sample.left * src.channels;
-            const src_offset_10 = x_sample.right * src.channels;
-            const dst_offset = dx * dst.channels;
-            bilinearPixel(
-                dst_row[dst_offset ..][0..dst.channels],
-                row0[src_offset_00 ..][0..src.channels],
-                row0[src_offset_10 ..][0..src.channels],
-                row1[src_offset_00 ..][0..src.channels],
-                row1[src_offset_10 ..][0..src.channels],
-                x_sample.weight,
-                y_sample.weight,
-            );
-        }
-    }
+    const bilinear_ctx = BilinearResizeContext{
+        .src = src,
+        .dst = &dst,
+        .x_samples = x_samples,
+        .y_samples = y_samples,
+    };
+    try parallel.forChunks(target_height, target_width * target_height * src.channels, 32, resizeBilinearRows, .{&bilinear_ctx});
 
     return dst;
 }
@@ -195,45 +178,15 @@ fn resizeWithKernelFn(
 
     var dst = try ImageU8.init(allocator, target_width, target_height, src.channels);
     errdefer dst.deinit();
-    const dst_stride = dst.width * dst.channels;
-
-    for (0..target_height) |dy| {
-        const y_offset = dy * y_table.sample_len;
-        const y_indices = y_table.indices[y_offset .. y_offset + y_table.sample_len];
-        const y_weights = y_table.weights[y_offset .. y_offset + y_table.sample_len];
-        const dst_row = dst.data[dy * dst_stride ..][0..dst_stride];
-
-        for (0..target_width) |dx| {
-            const x_offset = dx * x_table.sample_len;
-            const x_indices = x_table.indices[x_offset .. x_offset + x_table.sample_len];
-            const x_weights = x_table.weights[x_offset .. x_offset + x_table.sample_len];
-            const dst_offset = dx * dst.channels;
-
-            for (0..src.channels) |channel| {
-                var weighted_sum: f32 = 0.0;
-                var weight_sum: f32 = 0.0;
-
-                for (y_indices, y_weights) |sy, wy| {
-                    if (wy == 0.0) continue;
-                    const row = src.data[sy * src.width * src.channels ..][0 .. src.width * src.channels];
-                    for (x_indices, x_weights) |sx, wx| {
-                        const weight = wx * wy;
-                        if (weight == 0.0) continue;
-                        weighted_sum += @as(f32, @floatFromInt(row[sx * src.channels + channel])) * weight;
-                        weight_sum += weight;
-                    }
-                }
-
-                if (weight_sum == 0.0) {
-                    const fallback_x = nearestSourceIndex(dx, src.width, target_width);
-                    const fallback_y = nearestSourceIndex(dy, src.height, target_height);
-                    dst_row[dst_offset + channel] = src.data[(fallback_y * src.width + fallback_x) * src.channels + channel];
-                } else {
-                    dst_row[dst_offset + channel] = clampToU8(weighted_sum / weight_sum);
-                }
-            }
-        }
-    }
+    const kernel_ctx = KernelResizeContext{
+        .src = src,
+        .dst = &dst,
+        .x_table = x_table,
+        .y_table = y_table,
+        .target_width = target_width,
+        .target_height = target_height,
+    };
+    try parallel.forChunks(target_height, target_width * target_height * src.channels, 16, resizeKernelRows, .{&kernel_ctx});
 
     return dst;
 }
@@ -256,6 +209,80 @@ const KernelAxisTable = struct {
     indices: []usize,
     weights: []f32,
 };
+
+const BilinearResizeContext = struct {
+    src: *const ImageU8,
+    dst: *ImageU8,
+    x_samples: []const LinearAxisSample,
+    y_samples: []const LinearAxisSample,
+};
+
+const KernelResizeContext = struct {
+    src: *const ImageU8,
+    dst: *ImageU8,
+    x_table: KernelAxisTable,
+    y_table: KernelAxisTable,
+    target_width: usize,
+    target_height: usize,
+};
+
+fn resizeBilinearRows(ctx: *const BilinearResizeContext, row_start: usize, row_end: usize) void {
+    const src_stride = ctx.src.width * ctx.src.channels;
+    const dst_stride = ctx.dst.width * ctx.dst.channels;
+
+    for (row_start..row_end) |dy| {
+        const y_sample = ctx.y_samples[dy];
+        const row0 = ctx.src.data[y_sample.left * src_stride ..][0..src_stride];
+        const row1 = ctx.src.data[y_sample.right * src_stride ..][0..src_stride];
+        const dst_row = ctx.dst.data[dy * dst_stride ..][0..dst_stride];
+
+        for (0..ctx.dst.width) |dx| {
+            const x_sample = ctx.x_samples[dx];
+            const src_offset_00 = x_sample.left * ctx.src.channels;
+            const src_offset_10 = x_sample.right * ctx.src.channels;
+            const dst_offset = dx * ctx.dst.channels;
+            bilinearPixel(
+                dst_row[dst_offset ..][0..ctx.dst.channels],
+                row0[src_offset_00 ..][0..ctx.src.channels],
+                row0[src_offset_10 ..][0..ctx.src.channels],
+                row1[src_offset_00 ..][0..ctx.src.channels],
+                row1[src_offset_10 ..][0..ctx.src.channels],
+                x_sample.weight,
+                y_sample.weight,
+            );
+        }
+    }
+}
+
+fn resizeKernelRows(ctx: *const KernelResizeContext, row_start: usize, row_end: usize) void {
+    const dst_stride = ctx.dst.width * ctx.dst.channels;
+    for (row_start..row_end) |dy| {
+        const y_offset = dy * ctx.y_table.sample_len;
+        const y_indices = ctx.y_table.indices[y_offset .. y_offset + ctx.y_table.sample_len];
+        const y_weights = ctx.y_table.weights[y_offset .. y_offset + ctx.y_table.sample_len];
+        const dst_row = ctx.dst.data[dy * dst_stride ..][0..dst_stride];
+
+        for (0..ctx.target_width) |dx| {
+            const x_offset = dx * ctx.x_table.sample_len;
+            const x_indices = ctx.x_table.indices[x_offset .. x_offset + ctx.x_table.sample_len];
+            const x_weights = ctx.x_table.weights[x_offset .. x_offset + ctx.x_table.sample_len];
+            const dst_offset = dx * ctx.dst.channels;
+            const fallback_x = nearestSourceIndex(dx, ctx.src.width, ctx.target_width);
+            const fallback_y = nearestSourceIndex(dy, ctx.src.height, ctx.target_height);
+
+            kernelPixel(
+                dst_row[dst_offset ..][0..ctx.dst.channels],
+                ctx.src,
+                x_indices,
+                x_weights,
+                y_indices,
+                y_weights,
+                fallback_x,
+                fallback_y,
+            );
+        }
+    }
+}
 
 fn buildNearestMap(
     allocator: std.mem.Allocator,
@@ -440,4 +467,119 @@ fn bilinearChannel(p00: u8, p10: u8, p01: u8, p11: u8, wx: f32, wy: f32) u8 {
     const top = lerp(@floatFromInt(p00), @floatFromInt(p10), wx);
     const bottom = lerp(@floatFromInt(p01), @floatFromInt(p11), wx);
     return @intFromFloat(@round(lerp(top, bottom, wy)));
+}
+
+fn kernelPixel(
+    dst: []u8,
+    src: *const ImageU8,
+    x_indices: []const usize,
+    x_weights: []const f32,
+    y_indices: []const usize,
+    y_weights: []const f32,
+    fallback_x: usize,
+    fallback_y: usize,
+) void {
+    switch (dst.len) {
+        1 => kernelPixelC1(dst, src, x_indices, x_weights, y_indices, y_weights, fallback_x, fallback_y),
+        3 => kernelPixelC3(dst, src, x_indices, x_weights, y_indices, y_weights, fallback_x, fallback_y),
+        4 => kernelPixelC4(dst, src, x_indices, x_weights, y_indices, y_weights, fallback_x, fallback_y),
+        else => kernelPixelGeneric(dst, src, x_indices, x_weights, y_indices, y_weights, fallback_x, fallback_y),
+    }
+}
+
+fn kernelPixelC1(dst: []u8, src: *const ImageU8, x_indices: []const usize, x_weights: []const f32, y_indices: []const usize, y_weights: []const f32, fallback_x: usize, fallback_y: usize) void {
+    var weighted_sum: f32 = 0.0;
+    var weight_sum: f32 = 0.0;
+    for (y_indices, y_weights) |sy, wy| {
+        if (wy == 0.0) continue;
+        const row = src.data[sy * src.width ..][0..src.width];
+        for (x_indices, x_weights) |sx, wx| {
+            const weight = wx * wy;
+            if (weight == 0.0) continue;
+            weighted_sum += @as(f32, @floatFromInt(row[sx])) * weight;
+            weight_sum += weight;
+        }
+    }
+    if (weight_sum == 0.0) {
+        dst[0] = src.data[fallback_y * src.width + fallback_x];
+    } else {
+        dst[0] = clampToU8(weighted_sum / weight_sum);
+    }
+}
+
+fn kernelPixelC3(dst: []u8, src: *const ImageU8, x_indices: []const usize, x_weights: []const f32, y_indices: []const usize, y_weights: []const f32, fallback_x: usize, fallback_y: usize) void {
+    var sums = [3]f32{ 0.0, 0.0, 0.0 };
+    var weight_sum: f32 = 0.0;
+    for (y_indices, y_weights) |sy, wy| {
+        if (wy == 0.0) continue;
+        const row = src.data[sy * src.width * 3 ..][0 .. src.width * 3];
+        for (x_indices, x_weights) |sx, wx| {
+            const weight = wx * wy;
+            if (weight == 0.0) continue;
+            const base = sx * 3;
+            sums[0] += @as(f32, @floatFromInt(row[base])) * weight;
+            sums[1] += @as(f32, @floatFromInt(row[base + 1])) * weight;
+            sums[2] += @as(f32, @floatFromInt(row[base + 2])) * weight;
+            weight_sum += weight;
+        }
+    }
+    if (weight_sum == 0.0) {
+        const base = (fallback_y * src.width + fallback_x) * 3;
+        dst[0] = src.data[base];
+        dst[1] = src.data[base + 1];
+        dst[2] = src.data[base + 2];
+    } else {
+        dst[0] = clampToU8(sums[0] / weight_sum);
+        dst[1] = clampToU8(sums[1] / weight_sum);
+        dst[2] = clampToU8(sums[2] / weight_sum);
+    }
+}
+
+fn kernelPixelC4(dst: []u8, src: *const ImageU8, x_indices: []const usize, x_weights: []const f32, y_indices: []const usize, y_weights: []const f32, fallback_x: usize, fallback_y: usize) void {
+    var sums = [4]f32{ 0.0, 0.0, 0.0, 0.0 };
+    var weight_sum: f32 = 0.0;
+    for (y_indices, y_weights) |sy, wy| {
+        if (wy == 0.0) continue;
+        const row = src.data[sy * src.width * 4 ..][0 .. src.width * 4];
+        for (x_indices, x_weights) |sx, wx| {
+            const weight = wx * wy;
+            if (weight == 0.0) continue;
+            const base = sx * 4;
+            inline for (0..4) |channel| sums[channel] += @as(f32, @floatFromInt(row[base + channel])) * weight;
+            weight_sum += weight;
+        }
+    }
+    if (weight_sum == 0.0) {
+        const base = (fallback_y * src.width + fallback_x) * 4;
+        inline for (0..4) |channel| dst[channel] = src.data[base + channel];
+    } else {
+        inline for (0..4) |channel| dst[channel] = clampToU8(sums[channel] / weight_sum);
+    }
+}
+
+fn kernelPixelGeneric(dst: []u8, src: *const ImageU8, x_indices: []const usize, x_weights: []const f32, y_indices: []const usize, y_weights: []const f32, fallback_x: usize, fallback_y: usize) void {
+    var sums = [_]f32{0.0} ** 8;
+    var weight_sum: f32 = 0.0;
+    if (dst.len > sums.len) {
+        const fallback_base = (fallback_y * src.width + fallback_x) * src.channels;
+        for (0..dst.len) |channel| dst[channel] = src.data[fallback_base + channel];
+        return;
+    }
+    for (y_indices, y_weights) |sy, wy| {
+        if (wy == 0.0) continue;
+        const row = src.data[sy * src.width * src.channels ..][0 .. src.width * src.channels];
+        for (x_indices, x_weights) |sx, wx| {
+            const weight = wx * wy;
+            if (weight == 0.0) continue;
+            const base = sx * src.channels;
+            for (0..dst.len) |channel| sums[channel] += @as(f32, @floatFromInt(row[base + channel])) * weight;
+            weight_sum += weight;
+        }
+    }
+    if (weight_sum == 0.0) {
+        const base = (fallback_y * src.width + fallback_x) * src.channels;
+        for (0..dst.len) |channel| dst[channel] = src.data[base + channel];
+    } else {
+        for (0..dst.len) |channel| dst[channel] = clampToU8(sums[channel] / weight_sum);
+    }
 }
