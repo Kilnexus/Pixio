@@ -3,6 +3,7 @@ const convert = @import("convert.zig");
 const crop = @import("crop.zig");
 const geometry = @import("geometry.zig");
 const fit_mod = @import("fit.zig");
+const parallel = @import("parallel.zig");
 const resize = @import("resize.zig");
 const tensor = @import("tensor.zig");
 const pixel = @import("pixel.zig");
@@ -154,6 +155,21 @@ pub const PreparedRoiTensorNCHWBatch = struct {
     }
 };
 
+const TensorBatchParallelContext = struct {
+    sources: []const *const ImageU8,
+    infos: []PreprocessInfo,
+    tensor: *TensorF32NCHW,
+    options: PreprocessOptions,
+};
+
+const RoiTensorBatchParallelContext = struct {
+    sources: []const *const ImageU8,
+    rois: []const RoiInput,
+    infos: []RoiPreprocessInfo,
+    tensor: *TensorF32NCHW,
+    options: PreprocessOptions,
+};
+
 pub fn prepareImage(
     allocator: std.mem.Allocator,
     src: *const ImageU8,
@@ -270,22 +286,19 @@ pub fn prepareTensorNchwBatch(
         tensor_out.stride_h,
     );
 
-    for (sources[1..], 1..) |src, i| {
-        var prepared = try prepareImage(allocator, src, options);
-        defer prepared.deinit();
-
-        if (prepared.image.width != tensor_out.width or prepared.image.height != tensor_out.height or prepared.image.channels != tensor_out.channels) {
-            return error.ShapeMismatch;
-        }
-
-        infos[i] = prepared.info;
-        const batch_offset = i * tensor_out.stride_n;
-        tensor.writeTensorNchwSample(
-            tensor_out.data[batch_offset ..][0..tensor_out.stride_n],
-            &prepared.image,
-            options.normalize,
-            tensor_out.stride_c,
-            tensor_out.stride_h,
+    if (sources.len > 1) {
+        const ctx = TensorBatchParallelContext{
+            .sources = sources[1..],
+            .infos = infos[1..],
+            .tensor = &tensor_out,
+            .options = options,
+        };
+        try parallel.forChunksFallible(
+            ctx.sources.len,
+            ctx.sources.len * tensor_out.stride_n,
+            1,
+            prepareTensorBatchSamples,
+            .{&ctx},
         );
     }
     return .{
@@ -336,29 +349,20 @@ pub fn prepareRoiTensorNchwBatch(
         tensor_out.stride_h,
     );
 
-    for (rois[1..], 1..) |roi, i| {
-        if (roi.image_index >= sources.len) return error.InvalidCropBounds;
-        var cropped = try crop.cropRect(allocator, sources[roi.image_index], roi.rect);
-        defer cropped.deinit();
-        var prepared = try prepareImage(allocator, &cropped, options);
-        defer prepared.deinit();
-
-        if (prepared.image.width != tensor_out.width or prepared.image.height != tensor_out.height or prepared.image.channels != tensor_out.channels) {
-            return error.ShapeMismatch;
-        }
-
-        infos[i] = .{
-            .image_index = roi.image_index,
-            .roi = roi.rect,
-            .preprocess = prepared.info,
+    if (rois.len > 1) {
+        const ctx = RoiTensorBatchParallelContext{
+            .sources = sources,
+            .rois = rois[1..],
+            .infos = infos[1..],
+            .tensor = &tensor_out,
+            .options = options,
         };
-        const batch_offset = i * tensor_out.stride_n;
-        tensor.writeTensorNchwSample(
-            tensor_out.data[batch_offset ..][0..tensor_out.stride_n],
-            &prepared.image,
-            options.normalize,
-            tensor_out.stride_c,
-            tensor_out.stride_h,
+        try parallel.forChunksFallible(
+            ctx.rois.len,
+            ctx.rois.len * tensor_out.stride_n,
+            1,
+            prepareRoiTensorBatchSamples,
+            .{&ctx},
         );
     }
 
@@ -598,4 +602,55 @@ fn remapScaledBox(
 
 fn clipToRange(value: f32, min_value: f32, max_value: f32) f32 {
     return @max(min_value, @min(max_value, value));
+}
+
+fn prepareTensorBatchSamples(ctx: *const TensorBatchParallelContext, start: usize, end: usize) !void {
+    for (start..end) |i| {
+        var prepared = try prepareImage(std.heap.page_allocator, ctx.sources[i], ctx.options);
+        defer prepared.deinit();
+
+        if (prepared.image.width != ctx.tensor.width or prepared.image.height != ctx.tensor.height or prepared.image.channels != ctx.tensor.channels) {
+            return error.ShapeMismatch;
+        }
+
+        ctx.infos[i] = prepared.info;
+        const batch_offset = (i + 1) * ctx.tensor.stride_n;
+        tensor.writeTensorNchwSample(
+            ctx.tensor.data[batch_offset ..][0..ctx.tensor.stride_n],
+            &prepared.image,
+            ctx.options.normalize,
+            ctx.tensor.stride_c,
+            ctx.tensor.stride_h,
+        );
+    }
+}
+
+fn prepareRoiTensorBatchSamples(ctx: *const RoiTensorBatchParallelContext, start: usize, end: usize) !void {
+    for (start..end) |i| {
+        const roi = ctx.rois[i];
+        if (roi.image_index >= ctx.sources.len) return error.InvalidCropBounds;
+
+        var cropped = try crop.cropRect(std.heap.page_allocator, ctx.sources[roi.image_index], roi.rect);
+        defer cropped.deinit();
+        var prepared = try prepareImage(std.heap.page_allocator, &cropped, ctx.options);
+        defer prepared.deinit();
+
+        if (prepared.image.width != ctx.tensor.width or prepared.image.height != ctx.tensor.height or prepared.image.channels != ctx.tensor.channels) {
+            return error.ShapeMismatch;
+        }
+
+        ctx.infos[i] = .{
+            .image_index = roi.image_index,
+            .roi = roi.rect,
+            .preprocess = prepared.info,
+        };
+        const batch_offset = (i + 1) * ctx.tensor.stride_n;
+        tensor.writeTensorNchwSample(
+            ctx.tensor.data[batch_offset ..][0..ctx.tensor.stride_n],
+            &prepared.image,
+            ctx.options.normalize,
+            ctx.tensor.stride_c,
+            ctx.tensor.stride_h,
+        );
+    }
 }
