@@ -19,6 +19,7 @@ pub fn main() !void {
         .{ .name = "resize-bilinear-640x640", .iterations = 8, .run = benchResizeBilinear },
         .{ .name = "resize-lanczos3-640x640", .iterations = 4, .run = benchResizeLanczos3 },
         .{ .name = "gaussian-blur-s1.4", .iterations = 4, .run = benchGaussianBlur },
+        .{ .name = "median-filter-r1", .iterations = 4, .run = benchMedianFilter },
         .{ .name = "prepare-tensor-nchw-batch4", .iterations = 8, .run = benchPrepareTensorBatch },
     };
 
@@ -58,6 +59,12 @@ fn benchResizeLanczos3(allocator: std.mem.Allocator, image: *const pixio.ImageU8
 
 fn benchGaussianBlur(allocator: std.mem.Allocator, image: *const pixio.ImageU8) !void {
     var dst = try pixio.gaussianBlur(allocator, image, 1.4);
+    defer dst.deinit();
+    std.mem.doNotOptimizeAway(dst.data[0]);
+}
+
+fn benchMedianFilter(allocator: std.mem.Allocator, image: *const pixio.ImageU8) !void {
+    var dst = try pixio.medianFilter(allocator, image, 1);
     defer dst.deinit();
     std.mem.doNotOptimizeAway(dst.data[0]);
 }

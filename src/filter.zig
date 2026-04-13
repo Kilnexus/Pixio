@@ -79,35 +79,14 @@ pub fn medianFilter(
     try validateFilterInputs(src);
     if (radius == 0) return cloneImage(allocator, src);
 
-    const window_len = (radius * 2 + 1) * (radius * 2 + 1);
-    var values = try allocator.alloc(u8, window_len);
-    defer allocator.free(values);
-
     var dst = try ImageU8.init(allocator, src.width, src.height, src.channels);
     errdefer dst.deinit();
-
-    for (0..src.height) |y| {
-        for (0..src.width) |x| {
-            for (0..src.channels) |channel| {
-                var count: usize = 0;
-                var sy_i: isize = @intCast(y);
-                sy_i -= @intCast(radius);
-                while (sy_i <= @as(isize, @intCast(y + radius))) : (sy_i += 1) {
-                    const sy = clampSignedIndex(sy_i, src.height);
-                    var sx_i: isize = @intCast(x);
-                    sx_i -= @intCast(radius);
-                    while (sx_i <= @as(isize, @intCast(x + radius))) : (sx_i += 1) {
-                        const sx = clampSignedIndex(sx_i, src.width);
-                        values[count] = src.get(sx, sy, channel);
-                        count += 1;
-                    }
-                }
-
-                std.mem.sort(u8, values[0..count], {}, comptime std.sort.asc(u8));
-                dst.set(x, y, channel, values[count / 2]);
-            }
-        }
-    }
+    const ctx = MedianFilterContext{
+        .src = src,
+        .dst = &dst,
+        .radius = radius,
+    };
+    try parallel.forChunksFallible(src.height, src.width * src.height * src.channels, 8, medianFilterRows, .{&ctx});
 
     return dst;
 }
@@ -244,6 +223,12 @@ const Spatial3x3Context = struct {
     dst: *ImageU8,
 };
 
+const MedianFilterContext = struct {
+    src: *const ImageU8,
+    dst: *ImageU8,
+    radius: usize,
+};
+
 fn convolveHorizontalFixedRows(ctx: *const FixedConvolutionContext, row_start: usize, row_end: usize) void {
     convolveHorizontalFixedRange(ctx.src, ctx.dst, ctx.kernel, row_start, row_end);
 }
@@ -331,6 +316,63 @@ fn embossRows(ctx: *const Spatial3x3Context, kernel: [3][3]i32, row_start: usize
             }
         }
     }
+}
+
+fn medianFilterRows(ctx: *const MedianFilterContext, row_start: usize, row_end: usize) !void {
+    const row_stride = ctx.src.width * ctx.src.channels;
+    const window = ctx.radius * 2 + 1;
+    const target_rank = (window * window) / 2;
+
+    for (row_start..row_end) |y| {
+        const dst_row = ctx.dst.data[y * row_stride ..][0..row_stride];
+        for (0..ctx.src.channels) |channel| {
+            var histogram = [_]usize{0} ** 256;
+            buildMedianHistogram(&histogram, ctx.src, y, channel, ctx.radius, 0);
+            dst_row[channel] = histogramMedian(&histogram, target_rank);
+
+            for (1..ctx.src.width) |x| {
+                const remove_x = clampSignedIndex(@as(isize, @intCast(x - 1)) - @as(isize, @intCast(ctx.radius)), ctx.src.width);
+                const add_x = clampOffset(x + ctx.radius, 0, ctx.src.width);
+                updateMedianHistogram(&histogram, ctx.src, y, channel, remove_x, add_x, ctx.radius);
+                dst_row[x * ctx.src.channels + channel] = histogramMedian(&histogram, target_rank);
+            }
+        }
+    }
+}
+
+fn buildMedianHistogram(histogram: *[256]usize, src: *const ImageU8, y: usize, channel: usize, radius: usize, center_x: usize) void {
+    var sy_i: isize = @intCast(y);
+    sy_i -= @intCast(radius);
+    while (sy_i <= @as(isize, @intCast(y + radius))) : (sy_i += 1) {
+        const sy = clampSignedIndex(sy_i, src.height);
+        const row = src.data[sy * src.width * src.channels ..][0 .. src.width * src.channels];
+        var sx_i: isize = @intCast(center_x);
+        sx_i -= @intCast(radius);
+        while (sx_i <= @as(isize, @intCast(center_x + radius))) : (sx_i += 1) {
+            const sx = clampSignedIndex(sx_i, src.width);
+            histogram[row[sx * src.channels + channel]] += 1;
+        }
+    }
+}
+
+fn updateMedianHistogram(histogram: *[256]usize, src: *const ImageU8, y: usize, channel: usize, remove_x: usize, add_x: usize, radius: usize) void {
+    var sy_i: isize = @intCast(y);
+    sy_i -= @intCast(radius);
+    while (sy_i <= @as(isize, @intCast(y + radius))) : (sy_i += 1) {
+        const sy = clampSignedIndex(sy_i, src.height);
+        const row = src.data[sy * src.width * src.channels ..][0 .. src.width * src.channels];
+        histogram[row[remove_x * src.channels + channel]] -= 1;
+        histogram[row[add_x * src.channels + channel]] += 1;
+    }
+}
+
+fn histogramMedian(histogram: *const [256]usize, target_rank: usize) u8 {
+    var acc: usize = 0;
+    for (histogram, 0..) |count, value| {
+        acc += count;
+        if (acc > target_rank) return @intCast(value);
+    }
+    return 255;
 }
 
 fn boxBlurHorizontalC1(src_row: []const u8, dst_row: []u8, width: usize, radius: usize, window: usize, max_window_sum: usize) void {

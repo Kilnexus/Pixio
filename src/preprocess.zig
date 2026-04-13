@@ -170,6 +170,18 @@ const RoiTensorBatchParallelContext = struct {
     options: PreprocessOptions,
 };
 
+const PreparedImageBatchParallelContext = struct {
+    sources: []const *const ImageU8,
+    items: []PreparedImage,
+    options: PreprocessOptions,
+};
+
+const PreparedTensorBatchParallelContext = struct {
+    sources: []const *const ImageU8,
+    items: []PreparedTensor,
+    options: PreprocessOptions,
+};
+
 pub fn prepareImage(
     allocator: std.mem.Allocator,
     src: *const ImageU8,
@@ -211,17 +223,23 @@ pub fn prepareImageBatch(
     sources: []const *const ImageU8,
     options: PreprocessOptions,
 ) !PreparedImageBatch {
-    var items = try allocator.alloc(PreparedImage, sources.len);
+    const items = try allocator.alloc(PreparedImage, sources.len);
     errdefer allocator.free(items);
 
-    var built: usize = 0;
     errdefer {
-        for (items[0..built]) |*item| item.deinit();
+        for (items) |*item| {
+            if (@intFromPtr(item.image.data.ptr) != 0) item.deinit();
+        }
     }
+    @memset(std.mem.sliceAsBytes(items), 0);
 
-    for (sources, 0..) |src, i| {
-        items[i] = try prepareImage(allocator, src, options);
-        built += 1;
+    if (sources.len > 0) {
+        const ctx = PreparedImageBatchParallelContext{
+            .sources = sources,
+            .items = items,
+            .options = options,
+        };
+        try parallel.forChunksFallible(sources.len, sources.len * options.target_width * options.target_height, 1, prepareImageBatchItems, .{&ctx});
     }
 
     return .{
@@ -235,17 +253,23 @@ pub fn prepareTensorBatch(
     sources: []const *const ImageU8,
     options: PreprocessOptions,
 ) !PreparedTensorBatch {
-    var items = try allocator.alloc(PreparedTensor, sources.len);
+    const items = try allocator.alloc(PreparedTensor, sources.len);
     errdefer allocator.free(items);
 
-    var built: usize = 0;
     errdefer {
-        for (items[0..built]) |*item| item.deinit();
+        for (items) |*item| {
+            if (@intFromPtr(item.image.data.ptr) != 0) item.deinit();
+        }
     }
+    @memset(std.mem.sliceAsBytes(items), 0);
 
-    for (sources, 0..) |src, i| {
-        items[i] = try prepareTensor(allocator, src, options);
-        built += 1;
+    if (sources.len > 0) {
+        const ctx = PreparedTensorBatchParallelContext{
+            .sources = sources,
+            .items = items,
+            .options = options,
+        };
+        try parallel.forChunksFallible(sources.len, sources.len * options.target_width * options.target_height, 1, prepareTensorBatchItems, .{&ctx});
     }
 
     return .{
@@ -652,5 +676,17 @@ fn prepareRoiTensorBatchSamples(ctx: *const RoiTensorBatchParallelContext, start
             ctx.tensor.stride_c,
             ctx.tensor.stride_h,
         );
+    }
+}
+
+fn prepareImageBatchItems(ctx: *const PreparedImageBatchParallelContext, start: usize, end: usize) !void {
+    for (start..end) |i| {
+        ctx.items[i] = try prepareImage(std.heap.page_allocator, ctx.sources[i], ctx.options);
+    }
+}
+
+fn prepareTensorBatchItems(ctx: *const PreparedTensorBatchParallelContext, start: usize, end: usize) !void {
+    for (start..end) |i| {
+        ctx.items[i] = try prepareTensor(std.heap.page_allocator, ctx.sources[i], ctx.options);
     }
 }
