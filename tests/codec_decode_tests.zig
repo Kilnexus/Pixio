@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const imaging = @import("Pixio");
 const helpers = @import("helpers.zig");
 
@@ -21,8 +20,8 @@ test "decodeRgb8 decodes 24-bit bmp" {
         0x42, 0x4d, 0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00, 0x00, 0x00,
         0x28, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
         0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x13, 0x0b, 0x00, 0x00,
-        0x13, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00,
+        0x13, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0x00, 0xff, 0x00, 0x00, 0x00,
     };
 
     var image = try imaging.decodeRgb8(testing.allocator, &bmp);
@@ -89,20 +88,7 @@ test "decodeRgb8 decodes progressive jpeg" {
 test "decodeRgb8 decodes palette gif" {
     const testing = std.testing;
 
-    const gif = try helpers.decodeBase64Alloc(testing.allocator,
-        "R0lGODlhAgABAPcAAAAAAAAAMwAAZgAAmQAAzAAA/wArAAArMwArZgArmQArzAAr/wBVAABVMwBVZgBVmQBVzABV"
-        ++ "/wCAAACAMwCAZgCAmQCAzACA/wCqAACqMwCqZgCqmQCqzACq/wDVAADVMwDVZgDVmQDVzADV/wD/AAD/MwD/ZgD/"
-        ++ "mQD/zAD//zMAADMAMzMAZjMAmTMAzDMA/zMrADMrMzMrZjMrmTMrzDMr/zNVADNVMzNVZjNVmTNVzDNV/zOAADOA"
-        ++ "MzOAZjOAmTOAzDOA/zOqADOqMzOqZjOqmTOqzDOq/zPVADPVMzPVZjPVmTPVzDPV/zP/ADP/MzP/ZjP/mTP/zDP/"
-        ++ "/2YAAGYAM2YAZmYAmWYAzGYA/2YrAGYrM2YrZmYrmWYrzGYr/2ZVAGZVM2ZVZmZVmWZVzGZV/2aAAGaAM2aAZmaA"
-        ++ "mWaAzGaA/2aqAGaqM2aqZmaqmWaqzGaq/2bVAGbVM2bVZmbVmWbVzGbV/2b/AGb/M2b/Zmb/mWb/zGb//5kAAJkA"
-        ++ "M5kAZpkAmZkAzJkA/5krAJkrM5krZpkrmZkrzJkr/5lVAJlVM5lVZplVmZlVzJlV/5mAAJmAM5mAZpmAmZmAzJmA"
-        ++ "/5mqAJmqM5mqZpmqmZmqzJmq/5nVAJnVM5nVZpnVmZnVzJnV/5n/AJn/M5n/Zpn/mZn/zJn//8wAAMwAM8wAZswA"
-        ++ "mcwAzMwA/8wrAMwrM8wrZswrmcwrzMwr/8xVAMxVM8xVZsxVmcxVzMxV/8yAAMyAM8yAZsyAmcyAzMyA/8yqAMyq"
-        ++ "M8yqZsyqmcyqzMyq/8zVAMzVM8zVZszVmczVzMzV/8z/AMz/M8z/Zsz/mcz/zMz///8AAP8AM/8AZv8Amf8AzP8A"
-        ++ "//8rAP8rM/8rZv8rmf8rzP8r//9VAP9VM/9VZv9Vmf9VzP9V//+AAP+AM/+AZv+Amf+AzP+A//+qAP+qM/+qZv+q"
-        ++ "mf+qzP+q///VAP/VM//VZv/Vmf/VzP/V////AP//M///Zv//mf//zP///wAAAAAAAAAAAAAAACH5BAEAAPwALAAA"
-        ++ "AAACAAEAAAgFAKWRCAgAOw==");
+    const gif = try helpers.decodeBase64Alloc(testing.allocator, "R0lGODlhAgABAPcAAAAAAAAAMwAAZgAAmQAAzAAA/wArAAArMwArZgArmQArzAAr/wBVAABVMwBVZgBVmQBVzABV" ++ "/wCAAACAMwCAZgCAmQCAzACA/wCqAACqMwCqZgCqmQCqzACq/wDVAADVMwDVZgDVmQDVzADV/wD/AAD/MwD/ZgD/" ++ "mQD/zAD//zMAADMAMzMAZjMAmTMAzDMA/zMrADMrMzMrZjMrmTMrzDMr/zNVADNVMzNVZjNVmTNVzDNV/zOAADOA" ++ "MzOAZjOAmTOAzDOA/zOqADOqMzOqZjOqmTOqzDOq/zPVADPVMzPVZjPVmTPVzDPV/zP/ADP/MzP/ZjP/mTP/zDP/" ++ "/2YAAGYAM2YAZmYAmWYAzGYA/2YrAGYrM2YrZmYrmWYrzGYr/2ZVAGZVM2ZVZmZVmWZVzGZV/2aAAGaAM2aAZmaA" ++ "mWaAzGaA/2aqAGaqM2aqZmaqmWaqzGaq/2bVAGbVM2bVZmbVmWbVzGbV/2b/AGb/M2b/Zmb/mWb/zGb//5kAAJkA" ++ "M5kAZpkAmZkAzJkA/5krAJkrM5krZpkrmZkrzJkr/5lVAJlVM5lVZplVmZlVzJlV/5mAAJmAM5mAZpmAmZmAzJmA" ++ "/5mqAJmqM5mqZpmqmZmqzJmq/5nVAJnVM5nVZpnVmZnVzJnV/5n/AJn/M5n/Zpn/mZn/zJn//8wAAMwAM8wAZswA" ++ "mcwAzMwA/8wrAMwrM8wrZswrmcwrzMwr/8xVAMxVM8xVZsxVmcxVzMxV/8yAAMyAM8yAZsyAmcyAzMyA/8yqAMyq" ++ "M8yqZsyqmcyqzMyq/8zVAMzVM8zVZszVmczVzMzV/8z/AMz/M8z/Zsz/mcz/zMz///8AAP8AM/8AZv8Amf8AzP8A" ++ "//8rAP8rM/8rZv8rmf8rzP8r//9VAP9VM/9VZv9Vmf9VzP9V//+AAP+AM/+AZv+Amf+AzP+A//+qAP+qM/+qZv+q" ++ "mf+qzP+q///VAP/VM//VZv/Vmf/VzP/V////AP//M///Zv//mf//zP///wAAAAAAAAAAAAAAACH5BAEAAPwALAAA" ++ "AAACAAEAAAgFAKWRCAgAOw==");
     defer testing.allocator.free(gif);
 
     var image = try imaging.decodeRgb8(testing.allocator, gif);
@@ -130,9 +116,9 @@ test "decodeRgb8 decodes interlaced png" {
     try testing.expectEqual(@as(usize, 2), image.height);
     try testing.expectEqual(@as(usize, 3), image.channels);
     try testing.expectEqualSlices(u8, &[_]u8{
-        255, 0, 0,
-        0, 255, 0,
-        0, 0, 255,
+        255, 0,   0,
+        0,   255, 0,
+        0,   0,   255,
         255, 255, 255,
     }, image.data);
 }
@@ -149,8 +135,8 @@ test "decodeRgb8 decodes 2-bit grayscale png" {
     try testing.expectEqual(@as(usize, 4), image.width);
     try testing.expectEqual(@as(usize, 1), image.height);
     try testing.expectEqualSlices(u8, &[_]u8{
-        0, 0, 0,
-        85, 85, 85,
+        0,   0,   0,
+        85,  85,  85,
         170, 170, 170,
         255, 255, 255,
     }, image.data);
@@ -182,9 +168,9 @@ test "decodeRgb8 decodes 4-bit palette png" {
     try testing.expectEqual(@as(usize, 4), image.width);
     try testing.expectEqual(@as(usize, 1), image.height);
     try testing.expectEqualSlices(u8, &[_]u8{
-        255, 0, 0,
-        0, 255, 0,
-        0, 0, 255,
+        255, 0,   0,
+        0,   255, 0,
+        0,   0,   255,
         255, 255, 255,
     }, image.data);
 }
@@ -307,22 +293,7 @@ test "decodeRgb8 handles lossy and animated webp" {
 
     const lossy = try helpers.decodeBase64Alloc(testing.allocator, "UklGRkgAAABXRUJQVlA4IDwAAAAwAgCdASoCAAEAAAAAJaACdLoB+AADIQb7gAD5f/8uv//vTP/5zIj//2Z7/Znv9me/+zPf/maJjmP16AA=");
     defer testing.allocator.free(lossy);
-    if (builtin.os.tag == .windows) {
-        var image = try imaging.decodeRgb8(testing.allocator, lossy);
-        defer image.deinit();
-
-        try testing.expectEqual(@as(usize, 2), image.width);
-        try testing.expectEqual(@as(usize, 1), image.height);
-        try testing.expectEqual(@as(usize, 3), image.channels);
-        try testing.expect(image.data[0] >= 80 and image.data[0] <= 100);
-        try testing.expect(@abs(@as(i16, image.data[0]) - @as(i16, image.data[1])) <= 2);
-        try testing.expect(image.data[2] <= 5);
-        try testing.expect(image.data[3] > image.data[0]);
-        try testing.expect(@abs(@as(i16, image.data[3]) - @as(i16, image.data[4])) <= 2);
-        try testing.expect(image.data[5] >= 40 and image.data[5] <= 70);
-    } else {
-        try testing.expectError(error.UnsupportedWebpBitstream, imaging.decodeRgb8(testing.allocator, lossy));
-    }
+    try testing.expectError(error.UnsupportedWebpBitstream, imaging.decodeRgb8(testing.allocator, lossy));
 
     const animated = try helpers.decodeBase64Alloc(testing.allocator, "UklGRsoAAABXRUJQVlA4WAoAAAACAAAAAAAAAAAAQU5JTQYAAAAAAAAAAABBTk1GSgAAAAAAAAAAAAAAAAAAAGQAAAJWUDggMgAAADABAJ0BKgEAAQABQCYloAADcAD+8ut///mwP/bz/wR6Af//0uD//pcH//S4P/SkAAAAQU5NRkwAAAAAAAAAAAAAAAAAAABkAAAAVlA4IDQAAAA0AQCdASoBAAEAAAAmJaAAA3AA/ukiH//3nz//ufP/+58/6M///yn7//I4//8jj/5QIAAA");
     defer testing.allocator.free(animated);
@@ -370,8 +341,8 @@ test "decodeFileRgba8 decodes bmp alpha without loading via byte slice API" {
         0x42, 0x4d, 0x3e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00, 0x00, 0x00,
         0x28, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
         0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x13, 0x0b, 0x00, 0x00,
-        0x13, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0xff, 0x40, 0x00, 0xff, 0x00, 0xff,
+        0x13, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0x40, 0x00, 0xff, 0x00, 0xff,
     };
     try std.fs.cwd().writeFile(.{ .sub_path = path, .data = &bmp });
 
@@ -382,7 +353,7 @@ test "decodeFileRgba8 decodes bmp alpha without loading via byte slice API" {
     try testing.expectEqual(@as(usize, 1), image.height);
     try testing.expectEqual(@as(usize, 4), image.channels);
     try testing.expectEqualSlices(u8, &[_]u8{
-        255, 0, 0, 64,
-        0, 255, 0, 255,
+        255, 0,   0, 64,
+        0,   255, 0, 255,
     }, image.data);
 }

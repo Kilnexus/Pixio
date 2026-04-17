@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const types_mod = @import("webp/types.zig");
 const bitreader_mod = @import("webp/bitreader.zig");
 const container = @import("webp/container.zig");
@@ -7,7 +6,6 @@ const probe = @import("webp/probe.zig");
 const prefix_codes = @import("webp/prefix_codes.zig");
 const color_cache_mod = @import("webp/color_cache.zig");
 const transforms_mod = @import("webp/transforms.zig");
-const vp8_windows = if (builtin.os.tag == .windows) @import("webp/vp8_windows.zig") else struct {};
 
 pub const ImageU8 = types_mod.ImageU8;
 pub const WebpKind = types_mod.WebpKind;
@@ -64,10 +62,7 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     const scan = try probe.scanChunks(bytes);
     if (scan.info.is_animated) return error.UnsupportedWebpAnimation;
     return switch (scan.primary.tag) {
-        .vp8 => if (builtin.os.tag == .windows)
-            vp8_windows.decodeContainerRgb8(allocator, bytes)
-        else
-            error.UnsupportedWebpBitstream,
+        .vp8 => error.UnsupportedWebpBitstream,
         .vp8l => decodeVp8lRgb8(allocator, scan.primary.payload),
         .vp8x => error.UnsupportedWebpBitstream,
         else => error.MissingWebpChunk,
@@ -78,10 +73,7 @@ pub fn decodeRgba8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     const scan = try probe.scanChunks(bytes);
     if (scan.info.is_animated) return error.UnsupportedWebpAnimation;
     return switch (scan.primary.tag) {
-        .vp8 => if (builtin.os.tag == .windows)
-            vp8_windows.decodeContainerRgba8(allocator, bytes)
-        else
-            error.UnsupportedWebpBitstream,
+        .vp8 => error.UnsupportedWebpBitstream,
         .vp8l => decodeVp8lRgba8(allocator, scan.primary.payload),
         .vp8x => error.UnsupportedWebpBitstream,
         else => error.MissingWebpChunk,
