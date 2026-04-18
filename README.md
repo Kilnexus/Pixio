@@ -30,7 +30,7 @@
 
 ## Decode Support Matrix
 
-`decodeRgb8` returns RGB8 output. `decodeRgba8` returns RGBA8 output and preserves alpha for PNG, BMP 32-bit, transparent GIF first frames, ICO, and WebP where the source bitstream exposes it. JPEG decode remains opaque and now auto-applies EXIF orientation when present.
+`decodeRgb8` returns RGB8 output. `decodeRgba8` returns RGBA8 output and preserves alpha for PNG, BMP 32-bit, transparent GIF first frames, ICO, and WebP where the source bitstream exposes it. JPEG decode remains opaque and now auto-applies EXIF orientation when present. Animated GIF and animated lossless WebP can also be expanded through `decodeGifFrames*` and `decodeWebpFrames*`.
 
 | Format | Decode support | Notes |
 | --- | --- | --- |
@@ -39,11 +39,11 @@
 | JPEG | Partial | Baseline and progressive 8-bit JPEG; grayscale or 3-component scans |
 | GIF | Partial | Palette GIF decode of the first image frame |
 | ICO | Partial | PNG-backed icons and BMP-backed 24-bit/32-bit icons |
-| WebP | Partial | Lossless VP8L decode everywhere; lossy VP8 decode via Windows WIC; VP8X animation decode is not implemented |
+| WebP | Partial | Lossless VP8L decode everywhere, including animated VP8X containers with VP8L frames; lossy VP8 and `ALPH`-backed animated frames still return unsupported |
 
 ## Probe Support
 
-`probeInfo` is a metadata-oriented shallow probe. It returns width, height, default decode channel count, `native_channels`, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP, and it may succeed for files that the current decoders still reject, such as animated WebP.
+`probeInfo` is a metadata-oriented shallow probe. It returns width, height, default decode channel count, `native_channels`, and alpha presence for PNG, BMP, JPEG, GIF, ICO, and WebP, and it may succeed for files that the current decoders still reject, such as lossy or partially supported animated WebP variants.
 
 `probeFileInfo` and `probeWebpFileInfo` avoid reading entire files into memory. They read fixed-layout headers directly and scan JPEG/WebP containers incrementally.
 
