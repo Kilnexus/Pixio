@@ -11,8 +11,8 @@ const exif = @import("exif.zig");
 
 pub const ImageU8 = types.ImageU8;
 pub const ImageFormat = format.ImageFormat;
-pub const GifAnimation = gif.Animation;
-pub const GifAnimationFrame = gif.AnimationFrame;
+pub const GifAnimation = gif.GifAnimation;
+pub const GifAnimationFrame = gif.GifFrame;
 pub const WebpAnimation = webp.Animation;
 pub const WebpAnimationFrame = webp.AnimationFrame;
 
