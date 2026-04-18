@@ -11,6 +11,8 @@ const exif = @import("exif.zig");
 
 pub const ImageU8 = types.ImageU8;
 pub const ImageFormat = format.ImageFormat;
+pub const GifAnimation = gif.Animation;
+pub const GifAnimationFrame = gif.AnimationFrame;
 
 pub const DecodeError = types.ImageError || png.PngError || bmp.BmpError || jpeg.JpegError || gif.GifError || ico.IcoError || webp.WebpError || error{
     UnsupportedImageFormat,
@@ -39,6 +41,22 @@ pub fn decodeFileRgb8(allocator: std.mem.Allocator, path: []const u8) !ImageU8 {
 
 pub fn decodeFileRgba8(allocator: std.mem.Allocator, path: []const u8) !ImageU8 {
     return decodeFileWithChannels(allocator, path, 4);
+}
+
+pub fn decodeGifFramesRgb8(allocator: std.mem.Allocator, bytes: []const u8) !GifAnimation {
+    return try gif.decodeFramesRgb8(allocator, bytes);
+}
+
+pub fn decodeGifFramesRgba8(allocator: std.mem.Allocator, bytes: []const u8) !GifAnimation {
+    return try gif.decodeFramesRgba8(allocator, bytes);
+}
+
+pub fn decodeFileGifFramesRgb8(allocator: std.mem.Allocator, path: []const u8) !GifAnimation {
+    return try decodeFileGifFramesWithChannels(allocator, path, 3);
+}
+
+pub fn decodeFileGifFramesRgba8(allocator: std.mem.Allocator, path: []const u8) !GifAnimation {
+    return try decodeFileGifFramesWithChannels(allocator, path, 4);
 }
 
 fn decodeWithChannels(allocator: std.mem.Allocator, bytes: []const u8, output_channels: usize) !ImageU8 {
@@ -76,6 +94,29 @@ fn decodeFileWithChannels(allocator: std.mem.Allocator, path: []const u8, output
             var file_reader = file.reader(&read_buffer);
             break :blk decodeReaderWithChannels(allocator, &file_reader.interface, output_channels);
         },
+    };
+}
+
+fn decodeFileGifFramesWithChannels(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    output_channels: usize,
+) !GifAnimation {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const stat = try file.stat();
+    if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
+
+    var reader_buffer: [16 * 1024]u8 = undefined;
+    var reader = file.reader(&reader_buffer);
+    const bytes = try std.Io.Reader.allocRemaining(&reader.interface, allocator, .unlimited);
+    defer allocator.free(bytes);
+
+    return switch (output_channels) {
+        3 => try gif.decodeFramesRgb8(allocator, bytes),
+        4 => try gif.decodeFramesRgba8(allocator, bytes),
+        else => error.InvalidChannelCount,
     };
 }
 
