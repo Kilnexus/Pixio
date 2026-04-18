@@ -8,6 +8,8 @@ const color_cache_mod = @import("webp/color_cache.zig");
 const transforms_mod = @import("webp/transforms.zig");
 
 pub const ImageU8 = types_mod.ImageU8;
+pub const Animation = types_mod.Animation;
+pub const AnimationFrame = types_mod.AnimationFrame;
 pub const WebpKind = types_mod.WebpKind;
 pub const WebpChunkTag = types_mod.WebpChunkTag;
 pub const WebpChunk = types_mod.WebpChunk;
@@ -59,25 +61,66 @@ const restoreColorIndexPaletteInPlace = transforms_mod.restoreColorIndexPaletteI
 const expandColorIndexedImage = transforms_mod.expandColorIndexedImage;
 
 pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
-    const scan = try probe.scanChunks(bytes);
-    if (scan.info.is_animated) return error.UnsupportedWebpAnimation;
-    return switch (scan.primary.tag) {
-        .vp8 => error.UnsupportedWebpBitstream,
-        .vp8l => decodeVp8lRgb8(allocator, scan.primary.payload),
-        .vp8x => error.UnsupportedWebpBitstream,
-        else => error.MissingWebpChunk,
-    };
+    return decodeWithChannels(allocator, bytes, 3);
 }
 
 pub fn decodeRgba8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    return decodeWithChannels(allocator, bytes, 4);
+}
+
+pub fn decodeFramesRgb8(allocator: std.mem.Allocator, bytes: []const u8) !Animation {
+    return decodeFramesWithChannels(allocator, bytes, 3);
+}
+
+pub fn decodeFramesRgba8(allocator: std.mem.Allocator, bytes: []const u8) !Animation {
+    return decodeFramesWithChannels(allocator, bytes, 4);
+}
+
+fn decodeWithChannels(allocator: std.mem.Allocator, bytes: []const u8, output_channels: usize) !ImageU8 {
+    var animation = try decodeFramesWithChannels(allocator, bytes, output_channels);
+    errdefer animation.deinit();
+    if (animation.frames.len == 0) return error.MissingWebpChunk;
+
+    const image = try cloneImage(allocator, &animation.frames[0].image);
+    animation.deinit();
+    return image;
+}
+
+fn decodeFramesWithChannels(allocator: std.mem.Allocator, bytes: []const u8, output_channels: usize) !Animation {
+    if (output_channels != 3 and output_channels != 4) return error.InvalidChannelCount;
+
     const scan = try probe.scanChunks(bytes);
-    if (scan.info.is_animated) return error.UnsupportedWebpAnimation;
-    return switch (scan.primary.tag) {
-        .vp8 => error.UnsupportedWebpBitstream,
-        .vp8l => decodeVp8lRgba8(allocator, scan.primary.payload),
-        .vp8x => error.UnsupportedWebpBitstream,
-        else => error.MissingWebpChunk,
-    };
+    if (!scan.info.is_animated) {
+        const image = switch (scan.primary.tag) {
+            .vp8 => return error.UnsupportedWebpBitstream,
+            .vp8l => if (output_channels == 4)
+                try decodeVp8lRgba8(allocator, scan.primary.payload)
+            else
+                try decodeVp8lRgb8(allocator, scan.primary.payload),
+            .vp8x => return error.UnsupportedWebpBitstream,
+            else => return error.MissingWebpChunk,
+        };
+        errdefer {
+            var image_to_free = image;
+            image_to_free.deinit();
+        }
+
+        const frames = try allocator.alloc(AnimationFrame, 1);
+        frames[0] = .{
+            .image = image,
+            .duration_ms = 0,
+        };
+        return .{
+            .allocator = allocator,
+            .width = image.width,
+            .height = image.height,
+            .channels = output_channels,
+            .loop_count = null,
+            .frames = frames,
+        };
+    }
+
+    return decodeAnimatedFramesWithChannels(allocator, bytes, scan.info, output_channels);
 }
 
 fn decodeVp8lRgb8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8 {
@@ -90,6 +133,286 @@ fn decodeVp8lRgba8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8 {
     var argb = try decodeVp8lPayloadArgb(allocator, payload);
     defer argb.deinit();
     return argbToRgba8(allocator, argb.pixels, argb.width, argb.height);
+}
+
+const AnimationBackground = struct {
+    rgba: [4]u8 = .{ 0, 0, 0, 0 },
+    loop_count: ?u16 = null,
+};
+
+const FrameRect = struct {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+};
+
+const FrameBlendMethod = enum {
+    alpha_blend,
+    replace,
+};
+
+const FrameDisposeMethod = enum {
+    none,
+    background,
+};
+
+const PendingDisposal = struct {
+    rect: FrameRect,
+    method: FrameDisposeMethod,
+};
+
+const AnimatedFrame = struct {
+    rect: FrameRect,
+    duration_ms: u32,
+    blend_method: FrameBlendMethod,
+    dispose_method: FrameDisposeMethod,
+    image: ImageU8,
+};
+
+const NestedChunkIterator = struct {
+    bytes: []const u8,
+    pos: usize = 0,
+
+    fn next(self: *NestedChunkIterator) !?WebpChunk {
+        if (self.pos == self.bytes.len) return null;
+        if (self.pos + 8 > self.bytes.len) return error.InvalidWebpChunk;
+
+        const tag = self.bytes[self.pos .. self.pos + 4];
+        const chunk_size = container.readU32le(self.bytes[self.pos + 4 .. self.pos + 8]);
+        const payload_offset = self.pos + 8;
+        const payload_end = payload_offset + chunk_size;
+        if (payload_end > self.bytes.len) return error.InvalidWebpChunk;
+
+        const chunk = WebpChunk{
+            .tag = container.mapChunkTag(tag),
+            .payload = self.bytes[payload_offset..payload_end],
+        };
+        self.pos = payload_end + (chunk_size & 1);
+        return chunk;
+    }
+};
+
+fn decodeAnimatedFramesWithChannels(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    info: WebpInfo,
+    output_channels: usize,
+) !Animation {
+    var canvas = try ImageU8.init(allocator, info.width, info.height, 4);
+    errdefer canvas.deinit();
+    canvas.fill(0);
+
+    var frames = std.ArrayListUnmanaged(AnimationFrame).empty;
+    errdefer {
+        for (frames.items) |*frame| frame.deinit();
+        frames.deinit(allocator);
+    }
+
+    var background = AnimationBackground{};
+    var pending_disposal: ?PendingDisposal = null;
+    var saw_frame = false;
+
+    var it = try container.ChunkIterator.init(bytes);
+    while (try it.next()) |chunk| {
+        switch (chunk.tag) {
+            .anim => {
+                background = try parseAnimChunk(chunk.payload);
+                if (!saw_frame) clearRectRgba(&canvas, .{ .x = 0, .y = 0, .width = canvas.width, .height = canvas.height }, background.rgba);
+            },
+            .anmf => {
+                if (pending_disposal) |pending| applyPendingDisposal(&canvas, pending, background.rgba);
+                var frame = try decodeAnimatedFrameChunk(allocator, chunk.payload, info.width, info.height);
+                defer frame.image.deinit();
+
+                composeFrameOntoCanvas(&canvas, frame);
+                const output_image = if (output_channels == 4)
+                    try cloneImage(allocator, &canvas)
+                else
+                    try flattenRgbaToRgb(allocator, &canvas, background.rgba);
+                try frames.append(allocator, .{
+                    .image = output_image,
+                    .duration_ms = frame.duration_ms,
+                });
+
+                pending_disposal = .{
+                    .rect = frame.rect,
+                    .method = frame.dispose_method,
+                };
+                saw_frame = true;
+            },
+            else => {},
+        }
+    }
+
+    if (!saw_frame) return error.UnsupportedWebpAnimation;
+    canvas.deinit();
+    return .{
+        .allocator = allocator,
+        .width = info.width,
+        .height = info.height,
+        .channels = output_channels,
+        .loop_count = background.loop_count,
+        .frames = try frames.toOwnedSlice(allocator),
+    };
+}
+
+fn parseAnimChunk(payload: []const u8) !AnimationBackground {
+    if (payload.len < 6) return error.InvalidWebpData;
+    return .{
+        .rgba = .{ payload[2], payload[1], payload[0], payload[3] },
+        .loop_count = @intCast(container.readU16le(payload[4..6])),
+    };
+}
+
+fn decodeAnimatedFrameChunk(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    canvas_width: usize,
+    canvas_height: usize,
+) !AnimatedFrame {
+    if (payload.len < 16) return error.InvalidWebpData;
+
+    const x = container.readU24le(payload[0..3]) * 2;
+    const y = container.readU24le(payload[3..6]) * 2;
+    const width = container.readU24le(payload[6..9]) + 1;
+    const height = container.readU24le(payload[9..12]) + 1;
+    const duration_ms: u32 = @intCast(container.readU24le(payload[12..15]));
+    const flags = payload[15];
+    if (width == 0 or height == 0) return error.InvalidWebpData;
+    if (x + width > canvas_width or y + height > canvas_height) return error.InvalidWebpData;
+
+    var frame_image: ?ImageU8 = null;
+    var nested = NestedChunkIterator{ .bytes = payload[16..] };
+    while (try nested.next()) |chunk| {
+        switch (chunk.tag) {
+            .vp8l => {
+                if (frame_image != null) return error.InvalidWebpData;
+                frame_image = try decodeVp8lRgba8(allocator, chunk.payload);
+            },
+            .alph => return error.UnsupportedWebpAnimation,
+            .vp8 => return error.UnsupportedWebpAnimation,
+            else => {},
+        }
+    }
+
+    const image = frame_image orelse return error.MissingWebpChunk;
+    errdefer {
+        var image_to_free = image;
+        image_to_free.deinit();
+    }
+    if (image.width != width or image.height != height) return error.InvalidWebpData;
+
+    return .{
+        .rect = .{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = height,
+        },
+        .duration_ms = duration_ms,
+        .blend_method = if ((flags & 0x02) != 0) .replace else .alpha_blend,
+        .dispose_method = if ((flags & 0x01) != 0) .background else .none,
+        .image = image,
+    };
+}
+
+fn composeFrameOntoCanvas(canvas: *ImageU8, frame: AnimatedFrame) void {
+    switch (frame.blend_method) {
+        .replace => blitFrameReplace(canvas, frame),
+        .alpha_blend => blitFrameBlend(canvas, frame),
+    }
+}
+
+fn applyPendingDisposal(canvas: *ImageU8, pending: PendingDisposal, background_rgba: [4]u8) void {
+    switch (pending.method) {
+        .none => {},
+        .background => clearRectRgba(canvas, pending.rect, background_rgba),
+    }
+}
+
+fn blitFrameReplace(canvas: *ImageU8, frame: AnimatedFrame) void {
+    for (0..frame.rect.height) |row| {
+        const dst_row_start = ((frame.rect.y + row) * canvas.width + frame.rect.x) * canvas.channels;
+        const src_row_start = row * frame.image.width * frame.image.channels;
+        const src_row_end = src_row_start + frame.rect.width * frame.image.channels;
+        @memcpy(
+            canvas.data[dst_row_start .. dst_row_start + frame.rect.width * canvas.channels],
+            frame.image.data[src_row_start..src_row_end],
+        );
+    }
+}
+
+fn blitFrameBlend(canvas: *ImageU8, frame: AnimatedFrame) void {
+    for (0..frame.rect.height) |row| {
+        for (0..frame.rect.width) |col| {
+            const dst_index = canvas.pixelIndex(frame.rect.x + col, frame.rect.y + row, 0);
+            const src_index = frame.image.pixelIndex(col, row, 0);
+            blendPixelOver(canvas.data[dst_index .. dst_index + 4], frame.image.data[src_index .. src_index + 4]);
+        }
+    }
+}
+
+fn blendPixelOver(dst: []u8, src: []const u8) void {
+    const src_alpha = @as(u32, src[3]);
+    if (src_alpha == 0) return;
+    if (src_alpha == 255) {
+        @memcpy(dst[0..4], src[0..4]);
+        return;
+    }
+
+    const dst_alpha = @as(u32, dst[3]);
+    const out_alpha = src_alpha + (dst_alpha * (255 - src_alpha) + 127) / 255;
+    if (out_alpha == 0) {
+        dst[0] = 0;
+        dst[1] = 0;
+        dst[2] = 0;
+        dst[3] = 0;
+        return;
+    }
+
+    const denom = @as(u64, out_alpha) * 255;
+    inline for (0..3) |channel| {
+        const src_term = @as(u64, src[channel]) * src_alpha * 255;
+        const dst_term = @as(u64, dst[channel]) * dst_alpha * (255 - src_alpha);
+        dst[channel] = @intCast((src_term + dst_term + denom / 2) / denom);
+    }
+    dst[3] = @intCast(out_alpha);
+}
+
+fn clearRectRgba(image: *ImageU8, rect: FrameRect, background_rgba: [4]u8) void {
+    for (rect.y..rect.y + rect.height) |y| {
+        for (rect.x..rect.x + rect.width) |x| {
+            const dst = image.pixelIndex(x, y, 0);
+            image.data[dst] = background_rgba[0];
+            image.data[dst + 1] = background_rgba[1];
+            image.data[dst + 2] = background_rgba[2];
+            image.data[dst + 3] = background_rgba[3];
+        }
+    }
+}
+
+fn flattenRgbaToRgb(allocator: std.mem.Allocator, rgba: *const ImageU8, background_rgba: [4]u8) !ImageU8 {
+    var rgb = try ImageU8.init(allocator, rgba.width, rgba.height, 3);
+    errdefer rgb.deinit();
+
+    for (0..rgba.width * rgba.height) |index| {
+        const src = rgba.data[index * 4 .. index * 4 + 4];
+        const dst = rgb.data[index * 3 .. index * 3 + 3];
+        const alpha = @as(u32, src[3]);
+        const inv_alpha = @as(u32, 255) - alpha;
+        dst[0] = @intCast((@as(u32, src[0]) * alpha + @as(u32, background_rgba[0]) * inv_alpha + 127) / 255);
+        dst[1] = @intCast((@as(u32, src[1]) * alpha + @as(u32, background_rgba[1]) * inv_alpha + 127) / 255);
+        dst[2] = @intCast((@as(u32, src[2]) * alpha + @as(u32, background_rgba[2]) * inv_alpha + 127) / 255);
+    }
+    return rgb;
+}
+
+fn cloneImage(allocator: std.mem.Allocator, source: *const ImageU8) !ImageU8 {
+    var cloned = try ImageU8.init(allocator, source.width, source.height, source.channels);
+    errdefer cloned.deinit();
+    @memcpy(cloned.data, source.data);
+    return cloned;
 }
 
 pub fn probeInfo(bytes: []const u8) !WebpInfo {
@@ -613,4 +936,43 @@ fn inspectEntropyImageDataAtBitPos(
         .prefix_codes_start_bit_pos = prefix_codes_start_bit_pos,
         .prefix_group = prefix_group,
     };
+}
+
+test "animated webp decoder returns composited frames in order" {
+    const testing = std.testing;
+    const webp_bytes = [_]u8{
+        0x52, 0x49, 0x46, 0x46, 0x84, 0x00, 0x00, 0x00,
+        0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58,
+        0x0a, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x4e,
+        0x49, 0x4d, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x41, 0x4e, 0x4d, 0x46,
+        0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x64, 0x00, 0x00, 0x02, 0x56, 0x50, 0x38, 0x4c,
+        0x0f, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00,
+        0x00, 0x07, 0x10, 0xfd, 0x8f, 0xfe, 0x07, 0x22,
+        0xa2, 0xff, 0x01, 0x00, 0x41, 0x4e, 0x4d, 0x46,
+        0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xc8, 0x00, 0x00, 0x00, 0x56, 0x50, 0x38, 0x4c,
+        0x0f, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00,
+        0x00, 0x07, 0xd0, 0xff, 0x88, 0xfe, 0x07, 0x22,
+        0xa2, 0xff, 0x01, 0x00,
+    };
+
+    var animation = try decodeFramesRgb8(testing.allocator, &webp_bytes);
+    defer animation.deinit();
+
+    try testing.expectEqual(@as(usize, 1), animation.width);
+    try testing.expectEqual(@as(usize, 1), animation.height);
+    try testing.expectEqual(@as(usize, 2), animation.frames.len);
+    try testing.expectEqual(@as(u32, 100), animation.frames[0].duration_ms);
+    try testing.expectEqual(@as(u32, 200), animation.frames[1].duration_ms);
+    try testing.expectEqualSlices(u8, &.{ 0xff, 0x00, 0x00 }, animation.frames[0].image.data[0..3]);
+    try testing.expectEqualSlices(u8, &.{ 0x00, 0xff, 0x00 }, animation.frames[1].image.data[0..3]);
+
+    var first_frame = try decodeRgb8(testing.allocator, &webp_bytes);
+    defer first_frame.deinit();
+    try testing.expectEqualSlices(u8, &.{ 0xff, 0x00, 0x00 }, first_frame.data[0..3]);
 }

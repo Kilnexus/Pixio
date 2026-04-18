@@ -3,6 +3,31 @@ const image_types = @import("../../types.zig");
 
 pub const ImageU8 = image_types.ImageU8;
 
+pub const AnimationFrame = struct {
+    image: ImageU8,
+    duration_ms: u32,
+
+    pub fn deinit(self: *AnimationFrame) void {
+        self.image.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const Animation = struct {
+    allocator: std.mem.Allocator,
+    width: usize,
+    height: usize,
+    channels: usize,
+    loop_count: ?u16,
+    frames: []AnimationFrame,
+
+    pub fn deinit(self: *Animation) void {
+        for (self.frames) |*frame| frame.deinit();
+        self.allocator.free(self.frames);
+        self.* = undefined;
+    }
+};
+
 pub const WebpKind = enum {
     vp8,
     vp8l,
