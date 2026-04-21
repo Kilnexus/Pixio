@@ -2,6 +2,11 @@ const std = @import("std");
 const imaging = @import("Pixio");
 const helpers = @import("helpers.zig");
 
+fn expectPixelRgb(image: *const imaging.ImageU8, x: usize, y: usize, expected: [3]u8) !void {
+    const idx = image.pixelIndex(x, y, 0);
+    try std.testing.expectEqualSlices(u8, &expected, image.data[idx .. idx + 3]);
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = std.testing;
 
@@ -83,6 +88,29 @@ test "decodeRgb8 decodes progressive jpeg" {
         254, 0, 0,
         254, 0, 0,
     }, image.data);
+}
+
+test "decodeRgb8 matches libjpeg style rgb samples for subsampled jpeg" {
+    const testing = std.testing;
+
+    const path = try helpers.resolveFirstExistingPath(&.{
+        "testdata/vision/bus.jpg",
+        "../../testdata/vision/bus.jpg",
+    });
+
+    var image = try imaging.decodeFileRgb8(testing.allocator, path);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 810), image.width);
+    try testing.expectEqual(@as(usize, 1080), image.height);
+    try testing.expectEqual(@as(usize, 3), image.channels);
+
+    try expectPixelRgb(&image, 0, 0, .{ 172, 146, 119 });
+    try expectPixelRgb(&image, 1, 0, .{ 174, 148, 121 });
+    try expectPixelRgb(&image, 2, 0, .{ 177, 152, 122 });
+    try expectPixelRgb(&image, 100, 100, .{ 210, 189, 158 });
+    try expectPixelRgb(&image, 320, 240, .{ 235, 236, 238 });
+    try expectPixelRgb(&image, 809, 1079, .{ 94, 88, 98 });
 }
 
 test "decodeRgb8 decodes palette gif" {

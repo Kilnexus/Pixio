@@ -35,3 +35,11 @@ pub fn writeBits(dst: []u8, bit_pos: *usize, value: usize, count: usize) void {
         writeBit(dst, bit_pos, @intCast((value >> @intCast(i)) & 1));
     }
 }
+
+pub fn resolveFirstExistingPath(candidates: []const []const u8) ![]const u8 {
+    for (candidates) |candidate| {
+        std.fs.cwd().access(candidate, .{}) catch continue;
+        return candidate;
+    }
+    return error.FileNotFound;
+}

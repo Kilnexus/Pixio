@@ -670,9 +670,9 @@ const Decoder = struct {
         const cr_plane = planes[2];
         for (0..self.frame.height) |y| {
             for (0..self.frame.width) |x| {
-                const yv = idct.samplePlane(&y_plane, x, y, self.frame.max_h, self.frame.max_v);
-                const cbv = idct.samplePlane(&cb_plane, x, y, self.frame.max_h, self.frame.max_v);
-                const crv = idct.samplePlane(&cr_plane, x, y, self.frame.max_h, self.frame.max_v);
+                const yv = idct.samplePlane(&y_plane, x, y, self.frame.width, self.frame.height);
+                const cbv = idct.samplePlane(&cb_plane, x, y, self.frame.width, self.frame.height);
+                const crv = idct.samplePlane(&cr_plane, x, y, self.frame.width, self.frame.height);
 
                 const yf = @as(f32, @floatFromInt(yv));
                 const cbf = @as(f32, @floatFromInt(cbv)) - 128.0;

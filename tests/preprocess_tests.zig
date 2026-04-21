@@ -1,5 +1,21 @@
 const std = @import("std");
 const imaging = @import("Pixio");
+const helpers = @import("helpers.zig");
+
+fn expectPixelRgb(image: *const imaging.ImageU8, x: usize, y: usize, expected: [3]u8) !void {
+    const idx = image.pixelIndex(x, y, 0);
+    try std.testing.expectEqualSlices(u8, &expected, image.data[idx .. idx + 3]);
+}
+
+fn expectPixelRgbApprox(image: *const imaging.ImageU8, x: usize, y: usize, expected: [3]u8, tolerance: u8) !void {
+    const idx = image.pixelIndex(x, y, 0);
+    for (0..3) |channel| {
+        const actual = image.data[idx + channel];
+        const lower = if (expected[channel] > tolerance) expected[channel] - tolerance else 0;
+        const upper = if (expected[channel] < 255 - tolerance) expected[channel] + tolerance else 255;
+        try std.testing.expect(actual >= lower and actual <= upper);
+    }
+}
 
 test "prepareImage fit converts format and exact-resizes" {
     const testing = std.testing;
@@ -110,6 +126,42 @@ test "prepareTensor produces normalized chw tensor" {
         4.0, 19.0,
         4.25, 11.75,
     }, prepared.tensor.data);
+}
+
+test "prepareImage letterbox matches opencv samples for yolo image" {
+    const testing = std.testing;
+
+    const path = try helpers.resolveFirstExistingPath(&.{
+        "testdata/vision/bus.jpg",
+        "../../testdata/vision/bus.jpg",
+    });
+
+    var src = try imaging.decodeFileRgb8(testing.allocator, path);
+    defer src.deinit();
+
+    var prepared = try imaging.prepareImage(testing.allocator, &src, .{
+        .target_width = 640,
+        .target_height = 640,
+        .mode = .letterbox,
+        .kernel = .bilinear,
+        .output_pixel_format = .rgb8,
+        .pad_value = 114,
+    });
+    defer prepared.deinit();
+
+    try testing.expectEqual(@as(usize, 640), prepared.image.width);
+    try testing.expectEqual(@as(usize, 640), prepared.image.height);
+    try testing.expectEqual(@as(usize, 480), prepared.info.resized_width);
+    try testing.expectEqual(@as(usize, 640), prepared.info.resized_height);
+    try testing.expectEqual(@as(usize, 80), prepared.info.offset_x);
+    try testing.expectEqual(@as(usize, 0), prepared.info.offset_y);
+
+    try expectPixelRgb(&prepared.image, 0, 0, .{ 114, 114, 114 });
+    try expectPixelRgbApprox(&prepared.image, 100, 100, .{ 182, 172, 123 }, 1);
+    try expectPixelRgbApprox(&prepared.image, 320, 240, .{ 38, 46, 65 }, 1);
+    try expectPixelRgbApprox(&prepared.image, 320, 320, .{ 2, 85, 156 }, 1);
+    try expectPixelRgbApprox(&prepared.image, 500, 500, .{ 14, 21, 27 }, 2);
+    try expectPixelRgb(&prepared.image, 639, 639, .{ 114, 114, 114 });
 }
 
 test "prepareImage validates requested shape" {
