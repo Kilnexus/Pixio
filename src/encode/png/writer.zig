@@ -5,6 +5,7 @@ const types = @import("../../types.zig");
 const container = @import("container.zig");
 const filter = @import("filter.zig");
 const zlib = @import("zlib.zig");
+const io = std.Options.debug_io;
 
 pub const ImageU8 = types.ImageU8;
 pub const ImageConstViewU8 = view_mod.ImageConstViewU8;
@@ -71,11 +72,11 @@ pub fn writeFile(allocator: std.mem.Allocator, path: []const u8, image: *const I
 }
 
 pub fn writeFileWithOptions(allocator: std.mem.Allocator, path: []const u8, image: *const ImageU8, options: PngEncodeOptions) !void {
-    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
-    defer file.close();
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+    defer file.close(io);
 
     var buffer: [16 * 1024]u8 = undefined;
-    var file_writer = file.writer(&buffer);
+    var file_writer = file.writer(io, &buffer);
     try writeWithOptions(allocator, &file_writer.interface, image, options);
     try file_writer.interface.flush();
 }

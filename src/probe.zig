@@ -9,6 +9,7 @@ const webp = @import("codecs/webp.zig");
 const exif = @import("exif.zig");
 const webp_probe = @import("codecs/webp/probe.zig");
 const webp_container = @import("codecs/webp/container.zig");
+const io = std.Options.debug_io;
 
 pub const ImageFormat = format.ImageFormat;
 
@@ -68,11 +69,11 @@ pub fn probeInfo(bytes: []const u8) !ImageInfo {
 }
 
 pub fn probeFileInfo(allocator: std.mem.Allocator, path: []const u8) !ImageInfo {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
     var header: [64]u8 = undefined;
-    const header_len = try file.preadAll(&header, 0);
+    const header_len = try file.readPositionalAll(io, &header, 0);
     const bytes = header[0..header_len];
 
     return switch (format.detectFormat(bytes)) {
@@ -94,8 +95,8 @@ pub fn probeWebpInfo(bytes: []const u8) !WebpInfo {
 pub fn probeWebpFileInfo(allocator: std.mem.Allocator, path: []const u8) !WebpInfo {
     _ = allocator;
 
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
     return probeWebpFile(file);
 }
 
@@ -373,9 +374,9 @@ fn probeWebp(bytes: []const u8) !ImageInfo {
     };
 }
 
-fn probePngFile(file: std.fs.File) !ImageInfo {
+fn probePngFile(file: std.Io.File) !ImageInfo {
     var header: [33]u8 = undefined;
-    if (try file.preadAll(&header, 0) < header.len) return error.InvalidPngChunk;
+    if (try file.readPositionalAll(io, &header, 0) < header.len) return error.InvalidPngChunk;
     if (readU32be(header[8..12]) != 13) return error.InvalidPngChunk;
     if (!std.mem.eql(u8, header[12..16], "IHDR")) return error.MissingPngIhdr;
 
@@ -385,7 +386,7 @@ fn probePngFile(file: std.fs.File) !ImageInfo {
     const color_type = header[25];
     var has_alpha = color_type == 4 or color_type == 6;
 
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
     const file_size: usize = @intCast(stat.size);
 
@@ -393,7 +394,7 @@ fn probePngFile(file: std.fs.File) !ImageInfo {
     var chunk_header: [8]u8 = undefined;
     var trns_buf: [256]u8 = undefined;
     while (offset + 12 <= file_size) {
-        if (try file.preadAll(&chunk_header, offset) < chunk_header.len) return error.InvalidPngChunk;
+        if (try file.readPositionalAll(io, &chunk_header, offset) < chunk_header.len) return error.InvalidPngChunk;
         const chunk_len = readU32be(chunk_header[0..4]);
         const chunk_type = chunk_header[4..8];
         offset += 8;
@@ -401,7 +402,7 @@ fn probePngFile(file: std.fs.File) !ImageInfo {
 
         if (std.mem.eql(u8, chunk_type, "tRNS")) {
             if (chunk_len > trns_buf.len) return error.InvalidPngChunk;
-            if (try file.preadAll(trns_buf[0..chunk_len], offset) < chunk_len) return error.InvalidPngChunk;
+            if (try file.readPositionalAll(io, trns_buf[0..chunk_len], offset) < chunk_len) return error.InvalidPngChunk;
             if (pngChunkHasTransparency(color_type, trns_buf[0..chunk_len])) has_alpha = true;
         } else if (std.mem.eql(u8, chunk_type, "IDAT") or std.mem.eql(u8, chunk_type, "IEND")) {
             break;
@@ -420,13 +421,13 @@ fn probePngFile(file: std.fs.File) !ImageInfo {
     };
 }
 
-fn probeIcoFile(allocator: std.mem.Allocator, file: std.fs.File) !ImageInfo {
-    const stat = try file.stat();
+fn probeIcoFile(allocator: std.mem.Allocator, file: std.Io.File) !ImageInfo {
+    const stat = try file.stat(io);
     if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
     const file_size: usize = @intCast(stat.size);
 
     var header: [6]u8 = undefined;
-    const header_len = try file.preadAll(&header, 0);
+    const header_len = try file.readPositionalAll(io, &header, 0);
     if (header_len < header.len) return error.InvalidIcoHeader;
 
     const count = readU16le(header[4..6]);
@@ -438,15 +439,15 @@ fn probeIcoFile(allocator: std.mem.Allocator, file: std.fs.File) !ImageInfo {
     const directory = try allocator.alloc(u8, directory_len);
     defer allocator.free(directory);
 
-    const directory_read = try file.preadAll(directory, 0);
+    const directory_read = try file.readPositionalAll(io, directory, 0);
     if (directory_read < directory_len) return error.InvalidIcoDirectory;
 
     return probeIco(directory);
 }
 
-fn probeJpegFile(file: std.fs.File) !ImageInfo {
+fn probeJpegFile(file: std.Io.File) !ImageInfo {
     var soi: [2]u8 = undefined;
-    const soi_len = try file.preadAll(&soi, 0);
+    const soi_len = try file.readPositionalAll(io, &soi, 0);
     if (soi_len < soi.len or soi[0] != 0xff or soi[1] != 0xd8) return error.InvalidJpegHeader;
 
     var pos: u64 = 2;
@@ -471,7 +472,7 @@ fn probeJpegFile(file: std.fs.File) !ImageInfo {
         if (marker >= 0xd0 and marker <= 0xd7) continue;
 
         var segment_len_bytes: [2]u8 = undefined;
-        if (try file.preadAll(&segment_len_bytes, pos) < segment_len_bytes.len) return error.InvalidJpegData;
+        if (try file.readPositionalAll(io, &segment_len_bytes, pos) < segment_len_bytes.len) return error.InvalidJpegData;
         const segment_len = readU16be(segment_len_bytes[0..2]);
         if (segment_len < 2) return error.InvalidJpegSegment;
 
@@ -479,7 +480,7 @@ fn probeJpegFile(file: std.fs.File) !ImageInfo {
             if (segment_len < 8) return error.InvalidJpegSegment;
 
             var frame_header: [6]u8 = undefined;
-            if (try file.preadAll(&frame_header, pos + 2) < frame_header.len) return error.InvalidJpegSegment;
+            if (try file.readPositionalAll(io, &frame_header, pos + 2) < frame_header.len) return error.InvalidJpegSegment;
 
             const encoded_height = readU16be(frame_header[1..3]);
             const encoded_width = readU16be(frame_header[3..5]);
@@ -503,13 +504,13 @@ fn probeJpegFile(file: std.fs.File) !ImageInfo {
     return error.MissingJpegFrame;
 }
 
-fn probeWebpFile(file: std.fs.File) !WebpInfo {
-    const stat = try file.stat();
+fn probeWebpFile(file: std.Io.File) !WebpInfo {
+    const stat = try file.stat(io);
     if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
     const file_size: usize = @intCast(stat.size);
 
     var header: [12]u8 = undefined;
-    const header_len = try file.preadAll(&header, 0);
+    const header_len = try file.readPositionalAll(io, &header, 0);
     if (header_len < header.len) return error.InvalidWebpHeader;
     try webp_container.validateHeader(&header);
 
@@ -520,7 +521,7 @@ fn probeWebpFile(file: std.fs.File) !WebpInfo {
 
     while (offset + 8 <= file_size) {
         var chunk_header: [8]u8 = undefined;
-        if (try file.preadAll(&chunk_header, offset) < chunk_header.len) return error.InvalidWebpChunk;
+        if (try file.readPositionalAll(io, &chunk_header, offset) < chunk_header.len) return error.InvalidWebpChunk;
 
         const chunk_size = webp_container.readU32le(chunk_header[4..8]);
         const payload_offset = offset + 8;
@@ -530,19 +531,19 @@ fn probeWebpFile(file: std.fs.File) !WebpInfo {
             .vp8x => {
                 var payload: [10]u8 = undefined;
                 const payload_len = @min(payload.len, chunk_size);
-                if (try file.preadAll(payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
+                if (try file.readPositionalAll(io, payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
                 vp8x_info = try webp_probe.parseVp8x(payload[0..payload_len]);
             },
             .vp8 => {
                 var payload: [10]u8 = undefined;
                 const payload_len = @min(payload.len, chunk_size);
-                if (try file.preadAll(payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
+                if (try file.readPositionalAll(io, payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
                 primary_info = try webp_probe.parseVp8(payload[0..payload_len]);
             },
             .vp8l => {
                 var payload: [5]u8 = undefined;
                 const payload_len = @min(payload.len, chunk_size);
-                if (try file.preadAll(payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
+                if (try file.readPositionalAll(io, payload[0..payload_len], payload_offset) < payload_len) return error.InvalidWebpChunk;
                 primary_info = try webp_probe.parseVp8l(payload[0..payload_len]);
             },
             .anmf => saw_animation_chunk = true,
@@ -574,7 +575,7 @@ fn probeWebpFile(file: std.fs.File) !WebpInfo {
     return error.MissingWebpChunk;
 }
 
-fn probeWebpImageFile(file: std.fs.File) !ImageInfo {
+fn probeWebpImageFile(file: std.Io.File) !ImageInfo {
     const info = try probeWebpFile(file);
     return .{
         .format = .webp,
@@ -586,9 +587,9 @@ fn probeWebpImageFile(file: std.fs.File) !ImageInfo {
     };
 }
 
-fn probeGifFile(file: std.fs.File) !ImageInfo {
+fn probeGifFile(file: std.Io.File) !ImageInfo {
     var header: [13]u8 = undefined;
-    if (try file.preadAll(&header, 0) < header.len) return error.InvalidGifHeader;
+    if (try file.readPositionalAll(io, &header, 0) < header.len) return error.InvalidGifHeader;
     if (!std.mem.eql(u8, header[0..6], "GIF87a") and !std.mem.eql(u8, header[0..6], "GIF89a")) {
         return error.InvalidGifHeader;
     }
@@ -643,7 +644,7 @@ fn scanGifTransparencyBytes(bytes: []const u8, start_pos: usize) !bool {
     return false;
 }
 
-fn scanGifTransparencyFile(file: std.fs.File, start_pos: u64) !bool {
+fn scanGifTransparencyFile(file: std.Io.File, start_pos: u64) !bool {
     var pos = start_pos;
     while (true) {
         const sentinel = try readByteAt(file, pos) orelse return error.InvalidGifData;
@@ -654,7 +655,7 @@ fn scanGifTransparencyFile(file: std.fs.File, start_pos: u64) !bool {
                 pos += 1;
                 if (label == 0xF9) {
                     var control: [6]u8 = undefined;
-                    if (try file.preadAll(&control, pos) < control.len) return error.InvalidGifData;
+                    if (try file.readPositionalAll(io, &control, pos) < control.len) return error.InvalidGifData;
                     if (control[0] != 4) return error.InvalidGifBlock;
                     pos += control.len;
                     if ((control[1] & 0x01) != 0) return true;
@@ -682,7 +683,7 @@ fn skipGifSubBlocksBytes(bytes: []const u8, start_pos: usize) !usize {
     return pos;
 }
 
-fn skipGifSubBlocksFile(file: std.fs.File, start_pos: u64) !u64 {
+fn skipGifSubBlocksFile(file: std.Io.File, start_pos: u64) !u64 {
     var pos = start_pos;
     while (true) {
         const block_len = try readByteAt(file, pos) orelse return error.InvalidGifData;
@@ -709,9 +710,9 @@ fn pngNativeChannels(color_type: u8) usize {
     };
 }
 
-fn readByteAt(file: std.fs.File, offset: u64) !?u8 {
+fn readByteAt(file: std.Io.File, offset: u64) !?u8 {
     var byte: [1]u8 = undefined;
-    const read = try file.preadAll(&byte, offset);
+    const read = try file.readPositionalAll(io, &byte, offset);
     if (read == 0) return null;
     return byte[0];
 }

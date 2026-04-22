@@ -8,6 +8,7 @@ const gif = @import("codecs/gif.zig");
 const ico = @import("codecs/ico.zig");
 const webp = @import("codecs/webp.zig");
 const exif = @import("exif.zig");
+const io = std.Options.debug_io;
 
 pub const ImageU8 = types.ImageU8;
 pub const ImageFormat = format.ImageFormat;
@@ -97,19 +98,19 @@ fn decodeReaderWithChannels(allocator: std.mem.Allocator, reader: *std.Io.Reader
 }
 
 fn decodeFileWithChannels(allocator: std.mem.Allocator, path: []const u8, output_channels: usize) !ImageU8 {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
 
     var header: [64]u8 = undefined;
-    const header_len = try file.preadAll(&header, 0);
+    const header_len = try file.readPositionalAll(io, &header, 0);
     return switch (format.detectFormat(header[0..header_len])) {
         .bmp => if (output_channels == 4) bmp.decodeFileRgba8(allocator, file) else bmp.decodeFileRgb8(allocator, file),
         else => blk: {
             var read_buffer: [16 * 1024]u8 = undefined;
-            var file_reader = file.reader(&read_buffer);
+            var file_reader = file.reader(io, &read_buffer);
             break :blk decodeReaderWithChannels(allocator, &file_reader.interface, output_channels);
         },
     };
@@ -120,14 +121,14 @@ fn decodeFileGifFramesWithChannels(
     path: []const u8,
     output_channels: usize,
 ) !GifAnimation {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
 
     var reader_buffer: [16 * 1024]u8 = undefined;
-    var reader = file.reader(&reader_buffer);
+    var reader = file.reader(io, &reader_buffer);
     const bytes = try std.Io.Reader.allocRemaining(&reader.interface, allocator, .unlimited);
     defer allocator.free(bytes);
 
@@ -143,14 +144,14 @@ fn decodeFileWebpFramesWithChannels(
     path: []const u8,
     output_channels: usize,
 ) !WebpAnimation {
-    var file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     if (stat.size > std.math.maxInt(usize)) return error.FileTooBig;
 
     var reader_buffer: [16 * 1024]u8 = undefined;
-    var reader = file.reader(&reader_buffer);
+    var reader = file.reader(io, &reader_buffer);
     const bytes = try std.Io.Reader.allocRemaining(&reader.interface, allocator, .unlimited);
     defer allocator.free(bytes);
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const transform = @import("transform.zig");
 const types = @import("types.zig");
+const io = std.Options.debug_io;
 
 pub const ImageU8 = types.ImageU8;
 
@@ -8,9 +9,9 @@ pub fn jpegOrientation(bytes: []const u8) u8 {
     return parseJpegOrientation(bytes) orelse 1;
 }
 
-pub fn jpegOrientationFile(allocator: std.mem.Allocator, file: std.fs.File) !u8 {
+pub fn jpegOrientationFile(allocator: std.mem.Allocator, file: std.Io.File) !u8 {
     var soi: [2]u8 = undefined;
-    if (try file.preadAll(&soi, 0) < soi.len or soi[0] != 0xff or soi[1] != 0xd8) return 1;
+    if (try file.readPositionalAll(io, &soi, 0) < soi.len or soi[0] != 0xff or soi[1] != 0xd8) return 1;
 
     var pos: u64 = 2;
     while (true) {
@@ -19,7 +20,7 @@ pub fn jpegOrientationFile(allocator: std.mem.Allocator, file: std.fs.File) !u8 
         if (marker >= 0xd0 and marker <= 0xd7) continue;
 
         var segment_len_bytes: [2]u8 = undefined;
-        if (try file.preadAll(&segment_len_bytes, pos) < segment_len_bytes.len) return 1;
+        if (try file.readPositionalAll(io, &segment_len_bytes, pos) < segment_len_bytes.len) return 1;
         const segment_len = readU16be(&segment_len_bytes);
         if (segment_len < 2) return 1;
 
@@ -27,7 +28,7 @@ pub fn jpegOrientationFile(allocator: std.mem.Allocator, file: std.fs.File) !u8 
             const payload_len = segment_len - 2;
             const payload = try allocator.alloc(u8, payload_len);
             defer allocator.free(payload);
-            if (try file.preadAll(payload, pos + 2) < payload_len) return 1;
+            if (try file.readPositionalAll(io, payload, pos + 2) < payload_len) return 1;
             return parseExifPayload(payload) orelse 1;
         }
 
@@ -101,7 +102,7 @@ fn parseExifPayload(payload: []const u8) ?u8 {
     return null;
 }
 
-fn nextMarker(file: std.fs.File, pos: *u64) !?u8 {
+fn nextMarker(file: std.Io.File, pos: *u64) !?u8 {
     while (true) {
         const byte = try readByteAt(file, pos.*) orelse return null;
         if (byte == 0xff) break;
@@ -118,9 +119,9 @@ fn nextMarker(file: std.fs.File, pos: *u64) !?u8 {
     }
 }
 
-fn readByteAt(file: std.fs.File, offset: u64) !?u8 {
+fn readByteAt(file: std.Io.File, offset: u64) !?u8 {
     var byte: [1]u8 = undefined;
-    const read = try file.preadAll(&byte, offset);
+    const read = try file.readPositionalAll(io, &byte, offset);
     if (read == 0) return null;
     return byte[0];
 }

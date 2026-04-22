@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("../types.zig");
+const io = std.Options.debug_io;
 
 pub const ImageU8 = types.ImageU8;
 
@@ -32,11 +33,11 @@ pub fn decodeRgba8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     return decodeBytesWithChannels(allocator, bytes, 4);
 }
 
-pub fn decodeFileRgb8(allocator: std.mem.Allocator, file: std.fs.File) !ImageU8 {
+pub fn decodeFileRgb8(allocator: std.mem.Allocator, file: std.Io.File) !ImageU8 {
     return decodeFileWithChannels(allocator, file, 3);
 }
 
-pub fn decodeFileRgba8(allocator: std.mem.Allocator, file: std.fs.File) !ImageU8 {
+pub fn decodeFileRgba8(allocator: std.mem.Allocator, file: std.Io.File) !ImageU8 {
     return decodeFileWithChannels(allocator, file, 4);
 }
 
@@ -62,14 +63,14 @@ fn decodeBytesWithChannels(allocator: std.mem.Allocator, bytes: []const u8, outp
     return image;
 }
 
-fn decodeFileWithChannels(allocator: std.mem.Allocator, file: std.fs.File, output_channels: usize) !ImageU8 {
+fn decodeFileWithChannels(allocator: std.mem.Allocator, file: std.Io.File, output_channels: usize) !ImageU8 {
     if (output_channels != 3 and output_channels != 4) return error.InvalidChannelCount;
 
     var header_bytes: [54]u8 = undefined;
-    if (try file.preadAll(&header_bytes, 0) < header_bytes.len) return error.InvalidBmpHeader;
+    if (try file.readPositionalAll(io, &header_bytes, 0) < header_bytes.len) return error.InvalidBmpHeader;
     const header = try parseHeader(&header_bytes);
 
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     if (stat.size > std.math.maxInt(usize)) return error.InvalidBmpData;
     const file_size: usize = @intCast(stat.size);
 
@@ -82,7 +83,7 @@ fn decodeFileWithChannels(allocator: std.mem.Allocator, file: std.fs.File, outpu
     else blk: {
         const table = try allocator.alloc(u8, header.palette_entries * 4);
         errdefer allocator.free(table);
-        if (try file.preadAll(table, header.palette_offset) < table.len) return error.InvalidBmpData;
+        if (try file.readPositionalAll(io, table, header.palette_offset) < table.len) return error.InvalidBmpData;
         break :blk table;
     };
     defer if (palette) |table| allocator.free(table);
@@ -96,7 +97,7 @@ fn decodeFileWithChannels(allocator: std.mem.Allocator, file: std.fs.File, outpu
     for (0..image.height) |y| {
         const src_y = if (header.bottom_up) image.height - 1 - y else y;
         const row_offset = header.pixel_offset + src_y * header.row_stride;
-        if (try file.preadAll(row, row_offset) < row.len) return error.InvalidBmpData;
+        if (try file.readPositionalAll(io, row, row_offset) < row.len) return error.InvalidBmpData;
         try decodeRow(&image, row, palette, header, y);
     }
 
